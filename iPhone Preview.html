@@ -80,7 +80,7 @@ h1 { font-size: 20px; margin-bottom: 4px; }
   <div class="phone">
     <div class="screen">
       <div class="island"></div>
-      <div class="statusbar"><span>22:41</span><span>📶 🔋</span></div>
+      <div class="statusbar"><span class="clk">--:--</span><span>📶 🔋</span></div>
       <iframe class="appframe" src="http://localhost:8620" title="UK Transit Live"></iframe>
       <div class="homebar"></div>
     </div>
@@ -92,8 +92,8 @@ h1 { font-size: 20px; margin-bottom: 4px; }
       <div class="screen">
         <div class="island"></div>
         <div class="homescreen">
-          <div class="hs-time">22:41</div>
-          <div class="hs-date">Sunday 19 July</div>
+          <div class="hs-time clkbig">--:--</div>
+          <div class="hs-date clkdate">—</div>
           <div class="grid">
             <div class="app"><div class="ic"></div><span>Messages</span></div>
             <div class="app"><div class="ic"></div><span>Photos</span></div>
@@ -121,4 +121,12 @@ h1 { font-size: 20px; margin-bottom: 4px; }
     </div>
   </div>
 </div>
-</body></html>
+<script>
+function tick(){
+  const now = new Date();
+  const hm = now.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+  document.querySelectorAll('.clk,.clkbig').forEach(e => e.textContent = hm);
+  document.querySelectorAll('.clkdate').forEach(e => e.textContent = now.toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long'}));
+}
+tick(); setInterval(tick, 15000);
+</script></body></html>
