@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#171c22">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="UK Transit">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<title>UK Transit Live</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<button id="menubtn" aria-label="Menu">☰</button>
+<div id="sidebar">
+  <header>
+    <h1>UK Transit <span class="live">LIVE</span></h1>
+    <div id="sources" class="sources"></div>
+    <div class="searchrow findrow">
+      <input id="placesearch" placeholder="Search street, town or postcode…" autocomplete="off">
+      <button id="placego">Go</button>
+      <button id="locbtn" title="Near me">📍</button>
+    </div>
+    <div id="placeresults"></div>
+    <div class="mapbtns">
+      <button id="ukbtn">🇬🇧 Whole UK</button>
+      <button id="londonbtn">London</button>
+    </div>
+  </header>
+
+  <nav id="tabs">
+    <button class="tab active" data-tab="london">Network</button>
+    <button class="tab" data-tab="rail">Rail</button>
+    <button class="tab" data-tab="buses">Buses</button>
+    <button class="tab" data-tab="favs">★ Stops</button>
+    <button class="tab" data-tab="disr">⚠</button>
+  </nav>
+
+  <section id="tab-london" class="tabpane active">
+    <div class="hint">The whole network as a tree — open a group, click a line to light up its route, click any vehicle or stop on the map for live times.</div>
+    <div id="linelist"></div>
+  </section>
+
+  <section id="tab-rail" class="tabpane">
+    <div class="hint">The whole GB rail network is drawn on the map (zoom in for stations — click one for its live board). Live trains move across the country once a free Darwin key is added.</div>
+    <label class="toggle-row">
+      <input type="checkbox" id="ormtoggle">
+      <span>GB rail network lines (OpenRailwayMap overlay)</span>
+    </label>
+    <label class="toggle-row">
+      <input type="checkbox" id="nrtoggle" checked>
+      <span>Live National Rail trains (Darwin)</span>
+    </label>
+    <div id="nrhint" class="keyhint"></div>
+    <div class="hint" style="margin-top:10px">Live departures for any GB station — platforms, delays, cancellations:</div>
+    <div class="searchrow">
+      <input id="railsearch" list="stationlist" placeholder="Station name or CRS code (e.g. KGX)" autocomplete="off">
+      <datalist id="stationlist"></datalist>
+      <button id="railgo">Go</button>
+    </div>
+    <div id="railboard"></div>
+  </section>
+
+  <section id="tab-favs" class="tabpane">
+    <div class="hint">Your live dashboard: star ☆ any stop board or line and it appears here with the next arrivals, refreshed every 30s.</div>
+    <div id="favlist"></div>
+  </section>
+
+  <section id="tab-disr" class="tabpane">
+    <div class="hint">Only problems show here — an empty list means everything is running normally.</div>
+    <div id="disrlist"></div>
+    <div class="keyhint" style="margin-top:12px">National Rail cancellations and delay reasons join this view once the free Darwin key is active.</div>
+  </section>
+
+  <section id="tab-buses" class="tabpane">
+    <div class="hint">Search a London route to watch its buses move live on the map (keyless). Or click the map at zoom&nbsp;≥&nbsp;15 for nearby stops &amp; live arrivals.</div>
+    <div class="searchrow">
+      <input id="bussearch" placeholder="London bus route (e.g. 73, N25)" autocomplete="off">
+      <button id="busgo">Search</button>
+    </div>
+    <div id="busresults"></div>
+    <label class="toggle-row" id="bodsrow">
+      <input type="checkbox" id="bodstoggle" checked>
+      <span>Live buses across the UK 🚌</span>
+    </label>
+    <div class="hint">Zoomed out: a sampled spread of every live English bus. Zoom in anywhere for all of them with route &amp; destination.</div>
+    <div id="bodshint" class="keyhint"></div>
+  </section>
+
+  <footer>
+    Free open data: TfL · Darwin · BODS · OSM
+  </footer>
+</div>
+
+<div id="map"></div>
+<div id="livecount"></div>
+<div id="legend">
+  <span class="lchip" data-kind="bus">🚌 bus</span>
+  <span class="lchip" data-kind="coach">🚍 coach</span>
+  <span class="lchip" data-kind="train">🚆 train</span>
+  <span class="lchip" data-kind="tram">🚊 tram</span>
+  <span class="lchip" data-kind="boat">⛴ ferry</span>
+  <span class="lhint">· click to filter · click any vehicle or stop for times</span>
+</div>
+
+<div id="board" class="hidden">
+  <div id="board-head">
+    <div id="board-title"></div>
+    <button id="board-star" title="Add to My stops">☆</button>
+    <button id="board-close">×</button>
+  </div>
+  <div id="board-body"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

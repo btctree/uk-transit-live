@@ -1,0 +1,15 @@
+[Unit]
+Description=UK Transit Live server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/uk-transit/uk_transit_live
+ExecStart=/usr/bin/python3 -m uvicorn server:app --host 0.0.0.0 --port 8620
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

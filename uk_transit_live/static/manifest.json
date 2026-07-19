@@ -1,0 +1,21 @@
+{
+  "name": "UK Transit Live",
+  "short_name": "UK Transit",
+  "description": "Live UK transport map \u2014 every bus, train, tram and ferry moving in real time",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#171c22",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

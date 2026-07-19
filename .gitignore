@@ -1,0 +1,4 @@
+uk_transit_live/.env
+uk_transit_live/data/
+__pycache__/
+*.pyc
