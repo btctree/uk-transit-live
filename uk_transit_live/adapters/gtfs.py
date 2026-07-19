@@ -292,14 +292,28 @@ def departures(region: str, stop_id: str, live_positions: dict,
            WHERE st.stop_id=? AND st.dep BETWEEN ? AND ?
            ORDER BY st.dep LIMIT ?""",
         (stop_id, now_s - 180, now_s + window_min * 60, limit * 3)).fetchall()
+    # Last departure of the day per (line, headsign) — powers "last one tonight".
+    last_dep = {}
+    for dep_all, tid_all, short_all, hs_all, svc_all in con.execute(
+        """SELECT st.dep, st.trip_id, r.short, t.headsign, t.service_id
+           FROM stop_times st JOIN trips t ON t.trip_id=st.trip_id
+           JOIN routes r ON r.route_id=t.route_id
+           WHERE st.stop_id=? AND st.dep >= ?""", (stop_id, now_s - 180)):
+        if svc_all in active:
+            k = (short_all, hs_all)
+            if dep_all > last_dep.get(k, -1):
+                last_dep[k] = dep_all
+
     out = []
     for dep, tid, short, headsign, svc in rows:
         if svc not in active:
             continue
         delay = None
+        vpos = None
         live = tid in live_positions
         if live:
             plat, plon = live_positions[tid]
+            vpos = [round(plat, 5), round(plon, 5)]
             delay = delay_for_position(region, tid, plat, plon, now)
         expected = dep + (delay or 0)
         if expected < now_s - 60:   # already gone
@@ -308,7 +322,8 @@ def departures(region: str, stop_id: str, live_positions: dict,
             "line": short, "headsign": headsign, "tripId": tid,
             "schedSecs": dep, "expectedSecs": expected,
             "delayMin": None if delay is None else round(delay / 60),
-            "live": live,
+            "live": live, "vpos": vpos,
+            "isLast": last_dep.get((short, headsign)) == dep,
             "mins": max(0, round((expected - now_s) / 60)),
         })
         if len(out) >= limit:

@@ -111,7 +111,7 @@ $("placego").onclick = searchPlace;
 $("locbtn").onclick = () => {
   if (!navigator.geolocation) return;
   navigator.geolocation.getCurrentPosition(
-    (p) => map.setView([p.coords.latitude, p.coords.longitude], 15),
+    (p) => { state.userPos = [p.coords.latitude, p.coords.longitude]; map.setView(state.userPos, 15); },
     () => { $("placeresults").innerHTML = '<div class="empty">Couldn\'t get your location.</div>'; },
     { timeout: 8000 });
 };
@@ -348,7 +348,7 @@ function drawGeometry(id, isBus) {
       radius: isBus ? 3 : 3.5, color: "#fff", weight: 1, fillColor: g.colour, fillOpacity: 1,
     }).addTo(grp);
     m.bindTooltip(escapeHtml(s.name), { direction: "top", opacity: 0.9 });
-    m.on("click", () => openBoard(s.naptan || s.id, s.name));
+    m.on("click", () => openBoard(s.naptan || s.id, s.name, s.lat, s.lon));
   }
   state.geomLayers[id] = grp;
   // Lines are never shown by default — a route appears only when the user
@@ -929,17 +929,39 @@ async function openBoard(stopId, name, lat, lon) {
 
 async function renderBoard() {
   if (!state.board.stopId) return;
-  $("board-body").innerHTML = await boardRowsFor(state.board.stopId, state.board.lat, state.board.lon, 14);
+  const rows = await boardRowsFor(state.board.stopId, state.board.lat, state.board.lon, 14, state.board.name);
+  $("board-body").innerHTML = walkLine() + rows;
+}
+
+// "Leave by" — turns arrival data into the decision the user actually makes.
+function walkLine() {
+  const b = state.board;
+  if (!state.userPos || b.lat == null) return "";
+  const dm = Math.hypot((b.lat - state.userPos[0]) * 111000,
+    (b.lon - state.userPos[1]) * 111000 * Math.cos(b.lat * Math.PI / 180));
+  if (dm > 3000) return "";
+  const walk = Math.max(1, Math.round(dm / 80));
+  let advice = "";
+  if (state._firstMins != null && state._firstMins < 900) {
+    const spare = state._firstMins - walk;
+    advice = spare <= 0 ? " · <b>leave NOW to catch the next one</b>"
+      : ` · leave within <b>${spare} min</b> to catch it`;
+  }
+  return `<div class="walkline">🚶 ${walk} min walk from your location${advice}</div>`;
 }
 
 // Live times where they exist (London/TfL); GPS-based ESTIMATES elsewhere in
 // England (v1 of our own prediction engine: an approaching bus's heading +
 // distance at urban speed). Timetable-matched v2 is on the roadmap.
-async function boardRowsFor(stopId, lat, lon, maxRows) {
+async function boardRowsFor(stopId, lat, lon, maxRows, stopName) {
   const isLondon = LONDON_STOP_RE.test(stopId);
+  state._firstMins = null;
   let arrs = [];
   try { arrs = await api(`/api/arrivals/${stopId}`); } catch {}
-  if (arrs.length) return groupRowsHtml(arrs, maxRows);
+  if (arrs.length) {
+    state._firstMins = Math.round(Math.min(...arrs.map((a) => a.timeToStation ?? 1e9)) / 60);
+    return '<div class="estnote ok">Live times (TfL)</div>' + groupRowsHtml(arrs, maxRows, { stopId, stopName, lat, lon });
+  }
 
   if (!isLondon) {
     // v2: real timetable departures with live delay adjustment.
@@ -953,23 +975,32 @@ async function boardRowsFor(stopId, lat, lon, maxRows) {
         if (groups.get(k).entries.length < 2) groups.get(k).entries.push(x);
       }
       const hhmm = (s) => `${String(Math.floor((s % 86400) / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}`;
-      const rows = [...groups.values()]
+      const sorted = [...groups.values()]
         .sort((a, b) => a.entries[0].expectedSecs - b.entries[0].expectedSecs)
-        .slice(0, maxRows).map((g) => {
+        .slice(0, maxRows);
+      state._firstMins = sorted.length ? sorted[0].entries[0].mins : null;
+      const rows = sorted.map((g) => {
+          const e0 = g.entries[0];
           const times = g.entries.map((x) => {
             const chip = x.delayMin == null ? "" : Math.abs(x.delayMin) < 2 ? "•" : x.delayMin > 0 ? `+${x.delayMin}` : `${x.delayMin}`;
             return `${x.mins <= 0 ? "due" : x.mins + " min"}${x.live ? ` <span class="livechip${x.delayMin > 1 ? " late" : ""}">${chip || "live"}</span>` : ""}`;
           }).join(", ");
+          const flyAttr = e0.live && e0.vpos ? ` data-vpos="${e0.vpos[0]},${e0.vpos[1]}" title="Show this bus on the map"` : "";
+          const svc = escapeHtml(JSON.stringify({ stop: stopId, name: stopName || "", line: g.line, dest: g.headsign, lat, lon }));
+          const starred = (state.favs.services || []).some((s) => s.stop === stopId && s.line === g.line && s.dest === g.headsign);
           return `
-            <div class="arr">
+            <div class="arr${e0.live && e0.vpos ? " flyable" : ""}"${flyAttr}>
               <div class="routeno">${escapeHtml(g.line || "?")}</div>
-              <div class="dest">${escapeHtml(g.headsign || "?")}
-                <div class="sub">${g.entries.map((x) => hhmm(x.expectedSecs)).join(", ")}</div>
+              <div class="dest">${escapeHtml(g.headsign || "?")}${e0.isLast ? ' <span class="lastchip">LAST tonight</span>' : ""}
+                <div class="sub">${g.entries.map((x) => hhmm(x.expectedSecs)).join(", ")}${e0.live && e0.vpos ? ' · <span class="flyhint">tap row = see the bus</span>' : ""}</div>
               </div>
               <div class="due">${times}</div>
+              <span class="rowstar${starred ? " on" : ""}" data-svc="${svc}">${starred ? "★" : "☆"}</span>
             </div>`;
         }).join("");
-      return '<div class="estnote ok">Timetable departures · <b>live</b>-tagged rows are delay-adjusted from the bus\'s GPS.</div>' + rows;
+      const natNote = (d.region === "scotland" || d.region === "wales")
+        ? '<div class="popnote">Operators here are not yet required to publish live GPS (mandates land 2027-28) — most times are timetable-only.</div>' : "";
+      return '<div class="estnote ok">Timetable departures · <b>live</b>-tagged rows are delay-adjusted from GPS.</div>' + rows + natNote;
     }
     if (d && (d.state === "downloading" || d.state === "building")) {
       const est = await gpsEstimateRows(lat, lon, maxRows);
@@ -998,7 +1029,9 @@ async function gpsEstimateRows(lat, lon, maxRows) {
     if (!g.has(k)) g.set(k, { line: e.line, dest: e.destination, times: [] });
     if (g.get(k).times.length < 2) g.get(k).times.push(e.etaMin);
   }
-  const rows = [...g.values()].sort((x, y) => x.times[0] - y.times[0]).slice(0, maxRows).map((r) => `
+  const est_sorted = [...g.values()].sort((x, y) => x.times[0] - y.times[0]).slice(0, maxRows);
+  state._firstMins = est_sorted.length ? est_sorted[0].times[0] : null;
+  const rows = est_sorted.map((r) => `
     <div class="arr">
       <div class="routeno">${escapeHtml(r.line || "?")}</div>
       <div class="dest">${escapeHtml((r.dest || "?").replace(/_/g, " "))}</div>
@@ -1009,30 +1042,42 @@ async function gpsEstimateRows(lat, lon, maxRows) {
 
 // Group by route + destination: one row per service, next two times together —
 // a commuter reads "73 → Stoke Newington: 3 min, 11 min" at a glance.
-function groupRowsHtml(arrs, maxRows) {
+function groupRowsHtml(arrs, maxRows, ctx) {
   const groups = new Map();
   for (const a of arrs) {
     const gk = `${a.lineName || "?"}|${a.destination || ""}`;
-    if (!groups.has(gk)) groups.set(gk, { line: a.lineName, dest: a.destination, platform: a.platform, times: [] });
+    if (!groups.has(gk)) groups.set(gk, { line: a.lineName, lineId: a.lineId, dest: a.destination, platform: a.platform, veh: a.vehicleId, times: [] });
     const g = groups.get(gk);
     if (g.times.length < 2 && a.timeToStation != null) g.times.push(a.timeToStation);
   }
   const rows = [...groups.values()].sort((x, y) => (x.times[0] ?? 1e9) - (y.times[0] ?? 1e9));
-  return rows.slice(0, maxRows).map((g) => `
-    <div class="arr">
+  return rows.slice(0, maxRows).map((g) => {
+    const canFly = ctx && g.veh && g.veh !== "000" && g.lineId;
+    const vehAttr = canFly ? ` data-veh="${escapeHtml(g.lineId)}|${escapeHtml(g.veh)}" title="Show this vehicle on the map"` : "";
+    let star = "";
+    if (ctx) {
+      const svc = escapeHtml(JSON.stringify({ stop: ctx.stopId, name: ctx.stopName || "", line: g.line, dest: g.dest, lat: ctx.lat, lon: ctx.lon }));
+      const on = (state.favs.services || []).some((s) => s.stop === ctx.stopId && s.line === g.line && s.dest === g.dest);
+      star = `<span class="rowstar${on ? " on" : ""}" data-svc="${svc}">${on ? "★" : "☆"}</span>`;
+    }
+    return `
+    <div class="arr${canFly ? " flyable" : ""}"${vehAttr}>
       <div class="routeno">${escapeHtml(g.line || "?")}</div>
       <div class="dest">
         ${escapeHtml(g.dest || "?")}
         ${g.platform ? `<div class="sub">${escapeHtml(g.platform)}</div>` : ""}
       </div>
       <div class="due">${g.times.map(dueText).join(", ") || "—"}</div>
-    </div>`).join("");
+      ${star}
+    </div>`;
+  }).join("");
 }
+
 
 /* ---------- favourites: starred stops + lines -> live dashboard ---------- */
 state.favs = (() => {
-  try { return JSON.parse(localStorage.getItem("ukt_favs")) || { stops: [], lines: [] }; }
-  catch { return { stops: [], lines: [] }; }
+  try { const f = JSON.parse(localStorage.getItem("ukt_favs")) || {}; return { stops: f.stops || [], lines: f.lines || [], services: f.services || [] }; }
+  catch { return { stops: [], lines: [], services: [] }; }
 })();
 function saveFavs() {
   localStorage.setItem("ukt_favs", JSON.stringify(state.favs));
@@ -1057,7 +1102,7 @@ $("board-star").onclick = () => {
 async function renderFavs() {
   const el = $("favlist");
   if (!el) return;
-  if (!state.favs.lines.length && !state.favs.stops.length) {
+  if (!state.favs.lines.length && !state.favs.stops.length && !(state.favs.services || []).length) {
     el.innerHTML = '<div class="empty">Nothing starred yet. Open any stop board and tap ☆, or star a line in the London tab.</div>';
     return;
   }
@@ -1073,11 +1118,28 @@ async function renderFavs() {
         <div class="sev ${sevClass(l.severity)}">${escapeHtml(l.severityText)}</div>
       </div>`;
   }
-  el.innerHTML = linesHtml + (state.favs.stops.length ? '<div class="empty">Loading live times…</div>' : "");
-  if (!state.favs.stops.length) return;
+  // "My services" — commute-grain favourites: one route+direction at one stop.
+  let svcHtml = "";
+  for (const svc of (state.favs.services || [])) {
+    svcHtml += `<div class="favstop">
+      <div class="favname"><span class="jumpfav" data-id="${escapeHtml(svc.stop)}">${escapeHtml(svc.line)} → ${escapeHtml(svc.dest || "")}</span>
+      <span class="unstar" data-svc-del="${escapeHtml(svc.stop)}|${escapeHtml(svc.line)}|${escapeHtml(svc.dest || "")}" title="Remove">★</span></div>
+      <div class="sub" style="padding:0 2px 4px">${escapeHtml(svc.name || "")}</div>
+      <div class="svc-times" data-svc-key="${escapeHtml(svc.stop)}|${escapeHtml(svc.line)}|${escapeHtml(svc.dest || "")}"><div class="empty">loading…</div></div>
+    </div>`;
+  }
+  el.innerHTML = svcHtml + linesHtml + (state.favs.stops.length ? '<div class="empty">Loading live times…</div>' : "");
+  // fill service times asynchronously
+  for (const svc of (state.favs.services || [])) {
+    svcTimes(svc).then((html) => {
+      const slot = el.querySelector(`[data-svc-key="${CSS.escape(svc.stop + "|" + svc.line + "|" + (svc.dest || ""))}"]`);
+      if (slot) slot.innerHTML = html;
+    });
+  }
+  if (!state.favs.stops.length) { return; }
   const blocks = await Promise.all(state.favs.stops.map(async (s) => {
     let rows;
-    try { rows = await boardRowsFor(s.id, s.lat, s.lon, 4); }
+    try { rows = await boardRowsFor(s.id, s.lat, s.lon, 4, s.name); }
     catch (e) { rows = `<div class="empty">${escapeHtml(e.message)}</div>`; }
     return `<div class="favstop">
       <div class="favname"><span class="jumpfav" data-id="${escapeHtml(s.id)}">${escapeHtml(s.name)}</span>
@@ -1086,11 +1148,75 @@ async function renderFavs() {
   el.innerHTML = linesHtml + blocks.join("");
 }
 
+// Next two times for one favourite service (route+direction at a stop).
+async function svcTimes(svc) {
+  try {
+    if (LONDON_STOP_RE.test(svc.stop)) {
+      const arrs = await api(`/api/arrivals/${svc.stop}`);
+      const mine = arrs.filter((a) => a.lineName === svc.line && (a.destination || "") === (svc.dest || "")).slice(0, 2);
+      if (mine.length) return `<div class="due" style="font-size:13px">${mine.map((a) => dueText(a.timeToStation)).join(", ")} <span class="livechip">live</span></div>`;
+    } else {
+      const d = await api(`/api/departures/${svc.stop}`);
+      if (d.state === "ready") {
+        const mine = d.departures.filter((x) => x.line === svc.line && (x.headsign || "") === (svc.dest || "")).slice(0, 2);
+        if (mine.length) return `<div class="due" style="font-size:13px">${mine.map((x) => (x.mins <= 0 ? "due" : x.mins + " min") + (x.live ? ' <span class="livechip">live</span>' : "")).join(", ")}${mine[0].isLast ? ' <span class="lastchip">LAST tonight</span>' : ""}</div>`;
+      }
+    }
+  } catch {}
+  return '<div class="empty">no departures found in the next hour</div>';
+}
+
 $("favlist").addEventListener("click", (ev) => {
+  const und = ev.target.closest("[data-svc-del]");
+  if (und) {
+    const [stop, line, dest] = und.dataset.svcDel.split("|");
+    state.favs.services = (state.favs.services || []).filter((s) => !(s.stop === stop && s.line === line && (s.dest || "") === dest));
+    saveFavs();
+    return;
+  }
   const un = ev.target.closest(".unstar");
   if (un) { state.favs.stops = state.favs.stops.filter((s) => s.id !== un.dataset.id); saveFavs(); return; }
   const j = ev.target.closest(".jumpfav");
   if (j) jumpToStop(j.dataset.id, j.textContent);
+});
+
+// Board rows are doors, not dead ends: tap = see the actual vehicle; star = save the service.
+let _pulse = null;
+function pulseAt(lat, lon) {
+  if (_pulse) map.removeLayer(_pulse);
+  _pulse = L.circleMarker([lat, lon], { radius: 16, color: "#0098D4", weight: 3, fillOpacity: 0.1, className: "pulse" }).addTo(map);
+  setTimeout(() => { if (_pulse) { map.removeLayer(_pulse); _pulse = null; } }, 5000);
+}
+$("board-body").addEventListener("click", (ev) => {
+  const star = ev.target.closest(".rowstar");
+  if (star) {
+    const svc = JSON.parse(star.dataset.svc.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">"));
+    state.favs.services = state.favs.services || [];
+    const i = state.favs.services.findIndex((s) => s.stop === svc.stop && s.line === svc.line && s.dest === svc.dest);
+    if (i >= 0) state.favs.services.splice(i, 1); else state.favs.services.push(svc);
+    saveFavs();
+    renderBoard();
+    return;
+  }
+  const row = ev.target.closest(".arr[data-vpos]");
+  if (row) {
+    const [la, lo] = row.dataset.vpos.split(",").map(Number);
+    map.setView([la, lo], Math.max(map.getZoom(), 15));
+    pulseAt(la, lo);
+    return;
+  }
+  const vrow = ev.target.closest(".arr[data-veh]");
+  if (vrow) {
+    const [lineId, veh] = vrow.dataset.veh.split("|");
+    const v = state.vehicles.get(`tfl|${lineId}|${veh}`);
+    if (v) {
+      const pos = positionOf(v, clock());
+      map.setView(pos, Math.max(map.getZoom(), 14));
+      pulseAt(pos[0], pos[1]);
+      syncMarkers();
+      if (v.marker) v.marker.fire("click");
+    }
+  }
 });
 
 $("board-close").onclick = () => {
@@ -1253,11 +1379,22 @@ function renderCityChips(d) {
     const est = Math.round((n * scale) / 10) * 10;
     state.cityCounts = state.cityCounts || {};
     state.cityCounts[name] = est;
-    if (!est) continue;
+    // trains / trams / ferries near this city, from the live vehicle model
+    let tr = 0, tm = 0, bo = 0;
+    for (const v of state.vehicles.values()) {
+      if (v.b && Math.abs(v.b.lat - clat) < 0.3 && Math.abs(v.b.lon - clon) < 0.45) {
+        if (v.kind === "train") tr++;
+        else if (v.kind === "tram") tm++;
+        else if (v.kind === "boat") bo++;
+      }
+    }
+    const parts = [est ? `≈${est.toLocaleString()} 🚌` : "", tr ? `${tr} 🚆` : "",
+                   tm ? `${tm} 🚊` : "", bo ? `${bo} ⛴` : ""].filter(Boolean).join(" · ");
+    if (!parts) continue;
     const m = L.marker([clat, clon], {
       icon: L.divIcon({
         className: "chipwrap",
-        html: `<div class="citychip">${escapeHtml(name)}<span>≈${est.toLocaleString()} live 🚌</span></div>`,
+        html: `<div class="citychip">${escapeHtml(name)}<span>${parts}</span></div>`,
         iconSize: null,
       }),
       keyboard: false,
@@ -1451,4 +1588,23 @@ function renderSources() {
   loadStations();
   setInterval(pump, 1000);
   map.on("moveend", () => { if (state.bodsOn) { _due.bus = Date.now(); refreshBuses(); } });
+
+  // Launch to "near me": a commuter's first question is when's MY next one,
+  // not a map of Britain. Silent geolocate -> fly -> open the nearest stop.
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(async (p) => {
+      state.userPos = [p.coords.latitude, p.coords.longitude];
+      map.setView(state.userPos, 15);
+      try {
+        const b = map.getBounds();
+        const d = await api(`/api/stops?minLon=${b.getWest()}&minLat=${b.getSouth()}&maxLon=${b.getEast()}&maxLat=${b.getNorth()}`);
+        if (d.ready && d.stops.length) {
+          const near = d.stops
+            .map((s) => [Math.hypot(s[3] - state.userPos[0], s[4] - state.userPos[1]), s])
+            .sort((x, y) => x[0] - y[0])[0][1];
+          openBoard(near[0], near[2] ? `${near[1]} (${near[2]})` : near[1], near[3], near[4]);
+        }
+      } catch {}
+    }, () => {}, { timeout: 6000 });
+  }
 })();
