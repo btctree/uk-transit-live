@@ -539,8 +539,14 @@ const ROTATE_KINDS = new Set(["train", "tram", "boat"]);
 
 function applyHeading(v) {
   if (!v.marker || !ROTATE_KINDS.has(v.kind)) return;
-  const dx = (v.b.lon - v.a.lon) * Math.cos(((v.a.lat + v.b.lat) / 2) * Math.PI / 180);
-  const dy = v.b.lat - v.a.lat;
+  let p1 = v.a, p2 = v.b;
+  if (v.path && v.path.length > 1) {
+    const i = clamp(v._segIdx || 1, 1, v.path.length - 1);
+    p1 = { lat: v.path[i - 1][0], lon: v.path[i - 1][1] };
+    p2 = { lat: v.path[i][0], lon: v.path[i][1] };
+  }
+  const dx = (p2.lon - p1.lon) * Math.cos(((p1.lat + p2.lat) / 2) * Math.PI / 180);
+  const dy = p2.lat - p1.lat;
   if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return;   // stationary: keep last heading
   const el = v.marker.getElement();
   if (!el || !el.firstChild) return;
@@ -843,6 +849,8 @@ function nrTargets(trains) {
     id: t.id,
     a: t.a,
     b: t.b,
+    path: t.path || null,
+    _cum: null,
     segDur: t.segDur,
     tAtPoll: t.tts,
     colour: "#F5C518",           // yellow cars, grey surround (drawn by trainSvg)
@@ -868,6 +876,24 @@ function positionOf(v, now) {
   const elapsed = (now - v.pollAt) / 1000;
   const remain = v.tAtPoll - elapsed;
   const f = clamp(1 - remain / v.segDur, 0, 1);
+  if (v.path && v.path.length > 1) {
+    // travel along the real track polyline (cumulative-length lookup)
+    if (!v._cum) {
+      v._cum = [0];
+      for (let i = 1; i < v.path.length; i++) {
+        const [la1, lo1] = v.path[i - 1], [la2, lo2] = v.path[i];
+        v._cum.push(v._cum[i - 1] + Math.hypot((la2 - la1) * 111, (lo2 - lo1) * 111 * Math.cos(la1 * Math.PI / 180)));
+      }
+    }
+    const target = f * v._cum[v._cum.length - 1];
+    let i = 1;
+    while (i < v._cum.length - 1 && v._cum[i] < target) i++;
+    const span = v._cum[i] - v._cum[i - 1] || 1e-9;
+    const g = clamp((target - v._cum[i - 1]) / span, 0, 1);
+    const [la1, lo1] = v.path[i - 1], [la2, lo2] = v.path[i];
+    v._segIdx = i;
+    return [la1 + (la2 - la1) * g, lo1 + (lo2 - lo1) * g];
+  }
   return [v.a.lat + (v.b.lat - v.a.lat) * f, v.a.lon + (v.b.lon - v.a.lon) * f];
 }
 
@@ -875,7 +901,9 @@ function animateTick() {
   if (!map.hasLayer(state.vehicleLayer)) return;   // country view: nothing to animate
   const t = clock();
   for (const v of state.vehicles.values()) {
-    if (v.marker) v.marker.setLatLng(positionOf(v, t));
+    if (!v.marker) continue;
+    v.marker.setLatLng(positionOf(v, t));
+    if (v.path && v._segIdx !== v._lastSegIdx) { v._lastSegIdx = v._segIdx; applyHeading(v); }
   }
 }
 // setInterval (not requestAnimationFrame) so motion keeps running even when the

@@ -159,7 +159,17 @@ HUBS = [
     "HYM", "KDY", "ARB", "MTS", "AYR",
     "BRI", "CDF", "SWA", "NPT", "EXD", "PLY", "SOU", "BTN", "REA", "OXF",
     "CBG", "NRW", "IPS", "PBO", "LTN", "SVG", "GLD", "TON",
+    # expansion: regional + Scottish + branch coverage (net catches far more trains)
+    "CLJ", "SRA", "WIM", "FST", "CST", "BFR", "MOG",
+    "AYR", "KDY", "ARB", "MTH", "KMK", "DMF", "ELG",
+    "SHR", "CHD", "WKF", "HFX", "BDI", "HGT", "SCA", "DAR", "DHM", "SUN",
+    "PNR", "OXN", "BPN", "WGN", "BOL", "SPT", "MCV", "MIA", "CTR", "SOT",
+    "TAM", "NUN", "RUG", "MKC", "BDM", "LCN", "GRA", "ELY", "KLN", "COL",
+    "CHM", "AFK", "DVP", "MAR", "HGS", "EBN", "PMH", "WIN", "BSK", "SAL",
+    "BMH", "POO", "WEY", "TAU", "TOT", "PNZ", "TRU", "CNM", "GCR", "WOS",
+    "HFD", "BHI", "HHD", "BNG", "CMN",
 ]
+HUBS = list(dict.fromkeys(HUBS))  # dedupe overlapping additions
 
 _trains: dict[str, dict] = {}     # service id -> {timeline, dest, operator, updated}
 _stations_by_crs: dict[str, dict] = {}
@@ -283,7 +293,7 @@ async def poll_loop(client: httpx.AsyncClient) -> None:
             cutoff = time.time() - 600
             for sid in [k for k, v in _trains.items() if v["updated"] < cutoff]:
                 _trains.pop(sid, None)
-        await asyncio.sleep(90)
+        await asyncio.sleep(120)
 
 
 def national_trains() -> list[dict]:
@@ -297,10 +307,13 @@ def national_trains() -> list[dict]:
         for i in range(len(tl) - 1):
             a, b = tl[i], tl[i + 1]
             if a["t"] <= now <= b["t"]:
+                from . import railpath
+                track = railpath.get(a["crs"], b["crs"], a["lat"], a["lon"], b["lat"], b["lon"])
                 out.append({
                     "id": sid,
                     "a": {"lat": a["lat"], "lon": a["lon"]},
                     "b": {"lat": b["lat"], "lon": b["lon"]},
+                    "path": track,
                     "tts": max(0, round(b["t"] - now)),
                     "segDur": max(30, round(b["t"] - a["t"])),
                     "nextName": b["name"],

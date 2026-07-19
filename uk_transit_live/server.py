@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from adapters import bods, darwin, gtfs, naptan, tfl
+from adapters import bods, darwin, gtfs, naptan, railpath, tfl
 
 ROOT = Path(__file__).resolve().parent
 
@@ -44,7 +44,10 @@ async def lifespan(app: FastAPI):
     stops_task = asyncio.create_task(naptan.ensure(app.state.client))
     # v2 timetable engine: pre-build the user's home region; others build lazily.
     gtfs_task = asyncio.create_task(gtfs.ensure_region(app.state.client, "north_west"))
+    # Track-geometry worker: snaps trains onto real OSM rail corridors, lazily.
+    rail_task = asyncio.create_task(railpath.worker(app.state.client))
     yield
+    rail_task.cancel()
     poller.cancel()
     stops_task.cancel()
     gtfs_task.cancel()

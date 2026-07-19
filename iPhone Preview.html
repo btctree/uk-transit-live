@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>UK Transit Live — iPhone 14 Pro preview</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+  background: linear-gradient(160deg, #1a2030, #0d1117 60%);
+  font-family: "Segoe UI", system-ui, sans-serif; color: #e8ecf1; padding: 26px 12px 50px;
+}
+h1 { font-size: 20px; margin-bottom: 4px; }
+.sub { font-size: 12.5px; color: #8b96a5; margin-bottom: 18px; max-width: 760px; text-align: center; line-height: 1.55; }
+.stage { display: flex; gap: 46px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+
+/* ---- iPhone 14 Pro frame (393x852 logical) ---- */
+.phone {
+  position: relative; width: 425px; height: 884px;
+  border-radius: 62px; background: #0b0d10;
+  border: 3px solid #3a3f46; box-shadow: 0 24px 70px rgba(0,0,0,.65), inset 0 0 4px rgba(255,255,255,.12);
+  padding: 16px;
+}
+.screen {
+  position: relative; width: 393px; height: 852px; border-radius: 47px; overflow: hidden; background: #000;
+}
+.island {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  width: 122px; height: 35px; border-radius: 20px; background: #000; z-index: 60;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.05);
+}
+.statusbar {
+  position: absolute; top: 0; left: 0; right: 0; height: 54px; z-index: 50;
+  display: flex; justify-content: space-between; align-items: center; padding: 16px 34px 0;
+  font-size: 15px; font-weight: 600; color: #fff; pointer-events: none;
+  text-shadow: 0 0 4px rgba(0,0,0,.55);
+}
+.homebar { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 134px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.85); z-index: 60; }
+.phone .cap { text-align: center; font-size: 12.5px; color: #8b96a5; margin-top: 14px; }
+
+/* live app iframe */
+.appframe { width: 393px; height: 852px; border: 0; display: block; }
+
+/* ---- home screen mock ---- */
+.homescreen {
+  width: 393px; height: 852px; position: relative;
+  background: linear-gradient(180deg, #34558b 0%, #6a4a8c 55%, #b0567a 100%);
+  display: flex; flex-direction: column;
+}
+.hs-time { text-align: center; margin-top: 84px; font-size: 78px; font-weight: 300; letter-spacing: 1px; color: #fff; text-shadow: 0 2px 14px rgba(0,0,0,.25); }
+.hs-date { text-align: center; font-size: 18px; color: rgba(255,255,255,.9); margin-top: 2px; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px 8px; padding: 46px 24px; }
+.app { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.app .ic {
+  width: 62px; height: 62px; border-radius: 15px; background: rgba(255,255,255,.22);
+  backdrop-filter: blur(6px); box-shadow: 0 4px 10px rgba(0,0,0,.22);
+}
+.app span { font-size: 11.5px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.app.ours .ic {
+  background: #171c22 url("http://localhost:8620/static/icon-192.png") center/cover;
+  outline: 3px solid rgba(255,255,255,.85); outline-offset: 3px;
+  animation: glow 2s ease-in-out infinite;
+}
+@keyframes glow { 50% { outline-color: rgba(255,215,64,.95); } }
+.dock {
+  margin-top: auto; margin-bottom: 26px; align-self: center;
+  display: flex; gap: 20px; padding: 14px 20px; border-radius: 30px;
+  background: rgba(255,255,255,.18); backdrop-filter: blur(10px);
+}
+.dock .ic { width: 58px; height: 58px; border-radius: 14px; background: rgba(255,255,255,.3); }
+
+.howto {
+  max-width: 330px; background: rgba(23,28,34,.85); border: 1px solid #2a3340; border-radius: 14px;
+  padding: 16px 18px; font-size: 13px; line-height: 1.65;
+}
+.howto h2 { font-size: 15px; margin-bottom: 8px; }
+.howto b { color: #ffd740; }
+.howto .note { color: #8b96a5; font-size: 11.5px; margin-top: 10px; line-height: 1.5; }
+</style></head><body>
+<h1>📱 UK Transit Live on iPhone 14 Pro</h1>
+<div class="sub">Left: the app <b>running live inside a real iPhone 14 Pro screen</b> (393×852) — this is your actual server, fully interactive: pan, tap the ☰ menu, tap stops and vehicles. Right: how it sits on the home screen once installed, plus the install steps.</div>
+<div class="stage">
+  <div class="phone">
+    <div class="screen">
+      <div class="island"></div>
+      <div class="statusbar"><span>22:41</span><span>📶 🔋</span></div>
+      <iframe class="appframe" src="http://localhost:8620" title="UK Transit Live"></iframe>
+      <div class="homebar"></div>
+    </div>
+    <div class="cap">Live app in the phone frame — try it, it's real</div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:26px">
+    <div class="phone" style="transform:scale(.62);transform-origin:top center;margin-bottom:-310px">
+      <div class="screen">
+        <div class="island"></div>
+        <div class="homescreen">
+          <div class="hs-time">22:41</div>
+          <div class="hs-date">Sunday 19 July</div>
+          <div class="grid">
+            <div class="app"><div class="ic"></div><span>Messages</span></div>
+            <div class="app"><div class="ic"></div><span>Photos</span></div>
+            <div class="app"><div class="ic"></div><span>Camera</span></div>
+            <div class="app"><div class="ic"></div><span>Maps</span></div>
+            <div class="app ours"><div class="ic"></div><span>UK Transit</span></div>
+            <div class="app"><div class="ic"></div><span>Weather</span></div>
+            <div class="app"><div class="ic"></div><span>Notes</span></div>
+            <div class="app"><div class="ic"></div><span>Music</span></div>
+          </div>
+          <div class="dock"><div class="ic"></div><div class="ic"></div><div class="ic"></div><div class="ic"></div></div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+      <div class="cap">Home screen after install — your red-bus icon</div>
+    </div>
+
+    <div class="howto">
+      <h2>Install on a real iPhone (2 minutes)</h2>
+      1. Once the app is on the cloud server (next step), open its address in <b>Safari</b> on the iPhone.<br>
+      2. Tap the <b>Share</b> button (square with ↑).<br>
+      3. Tap <b>“Add to Home Screen”</b> → Add.<br>
+      4. The <b>UK Transit</b> icon appears — opens full-screen, no browser bars, Dynamic-Island-aware, just like a native app.
+      <div class="note">Until the cloud step, this works on your PC only (the phone can't reach localhost). After the Oracle deployment it works anywhere — that's also what "runs with the laptop closed" gives you.</div>
+    </div>
+  </div>
+</div>
+</body></html>
