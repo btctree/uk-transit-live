@@ -228,7 +228,8 @@ def _ingest_board(raw: dict, hub_crs: str, now: datetime) -> None:
         if hub and dep_t:
             timeline.append({"crs": hub_crs, "lat": hub["lat"], "lon": hub["lon"],
                              "name": hub["name"], "t": dep_t.timestamp()})
-        for cpl in _as_list(s.get("subsequentCallingPoints"), "callingPointList"):
+        cpls = _as_list(s.get("subsequentCallingPoints"), "callingPointList")
+        for cpl in cpls[:1]:   # primary portion only — joins/splits list extra groups
             for cp in _as_list(cpl if isinstance(cpl, list) else cpl.get("callingPoint"), "callingPoint"):
                 st = _stations_by_crs.get((cp.get("crs") or "").upper())
                 t = _best_time(cp, now)

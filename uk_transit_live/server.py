@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from adapters import bods, darwin, gtfs, naptan, railpath, tfl
+from adapters import bods, darwin, gtfs, naptan, railnet, railpath, tfl
 
 ROOT = Path(__file__).resolve().parent
 
@@ -48,6 +48,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(gtfs.ensure_region(app.state.client, _r))
     # Track-geometry worker: snaps trains onto real OSM rail corridors, lazily.
     rail_task = asyncio.create_task(railpath.worker(app.state.client))
+    # One-time national rail graph (~15 min of polite tile fetches, then local
+    # routing forever). Reloads instantly from disk on later starts.
+    asyncio.create_task(railnet.build(app.state.client))
     yield
     rail_task.cancel()
     poller.cancel()
@@ -197,7 +200,11 @@ async def vehicle_journey(line: str, origin: str, dep: str, lat: float, lon: flo
 
 @app.get("/api/railpaths")
 async def railpath_stats():
-    return railpath.stats()
+    trains = darwin.national_trains()
+    snapped = sum(1 for t in trains if t.get("path"))
+    st = railpath.stats()
+    st.update({"trains": len(trains), "snapped": snapped, "railnet": railnet.status()})
+    return st
 
 
 @app.get("/api/ghosts")

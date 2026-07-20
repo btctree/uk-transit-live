@@ -159,6 +159,14 @@ async function api(path) {
 }
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+function strHash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+// Dense-city discipline: buses are capped by zoom (stable sample, no flicker);
+// trains/trams/boats always render in full — they are few and load-bearing.
+function busCapForZoom(z) { return z >= 13 ? Infinity : z >= 11 ? 600 : 250; }
 function nowSecsLondon() {
   const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).formatToParts(new Date());
   const g = (t) => +p.find((x) => x.type === t).value;
@@ -802,7 +810,10 @@ function updateCounter() {
   }
   const n = state.vehicles.size;
   const hint = z >= DETAIL_ZOOM && z < 14 ? " · zoom closer for stops" : "";
-  $("livecount").textContent = n ? `${n.toLocaleString()} vehicles on map${hint}` : "";
+  const samp = state.busTotal > state.busShown && z >= DETAIL_ZOOM
+    ? ` · ${state.busShown.toLocaleString()} of ${state.busTotal.toLocaleString()} buses shown — zoom in for all`
+    : "";
+  $("livecount").textContent = n ? `${n.toLocaleString()} vehicles on map${hint}${samp}` : "";
 }
 
 function tflTargets(arrivals) {
@@ -1455,8 +1466,15 @@ async function refreshBuses() {
     if (state.config.bods) {
       const b = map.getBounds();
       const vs = await api(`/api/buses?minLon=${b.getWest()}&minLat=${b.getSouth()}&maxLon=${b.getEast()}&maxLat=${b.getNorth()}`);
-      state.busTotal = state.busShown = vs.length;
-      targets = vs.map((v) => busTarget(v.id, v.lat, v.lon, `Bus ${v.line || ""}`.trim(), v.destination, v.operator, v.bearing, v.line,
+      state.busTotal = vs.length;
+      const cap = busCapForZoom(z);
+      let picked = vs;
+      if (vs.length > cap) {
+        const step = Math.ceil(vs.length / cap);
+        picked = vs.filter((v) => strHash(v.id) % step === 0);
+      }
+      state.busShown = picked.length;
+      targets = picked.map((v) => busTarget(v.id, v.lat, v.lon, `Bus ${v.line || ""}`.trim(), v.destination, v.operator, v.bearing, v.line,
         { originName: v.originName, originRef: v.originRef, originDep: v.originDep, destRef: v.destRef, destArrival: v.destArrival }));
     } else {
       // Keyless fallback: national feed clipped to the viewport.
@@ -1476,6 +1494,7 @@ async function refreshBuses() {
 // publishes live GPS (Scotland, Wales, small operators). Clearly non-live.
 async function refreshGhosts() {
   if (map.getZoom() < DETAIL_ZOOM) { applyTargets("ghost", []); return; }
+  if (state.busTotal > busCapForZoom(map.getZoom())) { applyTargets("ghost", []); return; }
   const b = map.getBounds();
   let gs = [];
   try { gs = await api(`/api/ghosts?minLon=${b.getWest()}&minLat=${b.getSouth()}&maxLon=${b.getEast()}&maxLat=${b.getNorth()}`); }

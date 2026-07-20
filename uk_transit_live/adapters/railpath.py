@@ -14,6 +14,8 @@ from pathlib import Path
 
 import httpx
 
+from . import railnet
+
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "railpaths"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -49,7 +51,7 @@ def get(a_crs, b_crs, a_lat, a_lon, b_lat, b_lon):
     key = _key(a_crs, b_crs)
     hit = _load(key)
     if hit == "missing" or (hit is None and _time.time() - _fail_at.get(key, 0) > RETRY_AFTER):
-        if len(_pending) < 400:
+        if len(_pending) < 1500:
             _pending.setdefault(key, (a_lat, a_lon, b_lat, b_lon))
         if hit == "missing":
             return None
@@ -127,6 +129,22 @@ def _route(elements, a, b):
 
 
 async def _fetch_pair(client: httpx.AsyncClient, key: str, coords: tuple) -> None:
+    # Local national-graph routing first: instant, no rate limits.
+    if railnet.ready():
+        a = (coords[0], coords[1])
+        b = (coords[2], coords[3])
+        result = await asyncio.to_thread(railnet.route, a, b)
+        if result:
+            (CACHE_DIR / (key + ".json")).write_text(json.dumps(result), encoding="utf-8")
+        else:
+            _fail_at[key] = _time.time()
+        _mem[key] = result
+        _log(key, "local-" + ("ok" if result else "no-route"))
+        return
+    await _fetch_pair_overpass(client, key, coords)
+
+
+async def _fetch_pair_overpass(client: httpx.AsyncClient, key: str, coords: tuple) -> None:
     a = (coords[0], coords[1])
     b = (coords[2], coords[3])
     s, n = sorted((a[0], b[0]))
@@ -136,18 +154,28 @@ async def _fetch_pair(client: httpx.AsyncClient, key: str, coords: tuple) -> Non
     bbox = f"{s - pad_lat},{w - pad_lon},{n + pad_lat},{e + pad_lon}"
     # long express corridors need a patient query; short urban hops a quick one
     span = max(n - s, (e - w) * 0.6)
-    op_timeout = 120 if span > 0.35 else 50
+    if span > 1.4:   # ~150km+: too big for Overpass — accept the chord (permanent)
+        (CACHE_DIR / f"{key}.json").write_text("null", encoding="utf-8")
+        _mem[key] = None
+        _log(key, "skipped-too-long")
+        return
+    op_timeout = 90 if span > 0.35 else 30
     q = f'[out:json][timeout:{op_timeout}][maxsize:1073741824];way["railway"~"^(rail|light_rail)$"]({bbox});(._;>;);out body;'
     result = None
-    for url in OVERPASS:
-        try:
-            r = await client.post(url, data={"data": q}, timeout=op_timeout + 20,
-                                  headers={"User-Agent": "uk-transit-live/0.1"})
-            if r.status_code == 200:
-                result = _route(r.json().get("elements", []), a, b)
-                break
-        except Exception:
-            continue
+    # ONE mirror per attempt (alternating) — sequential mirror retries were
+    # doubling the worst case and strangling throughput.
+    url = OVERPASS[_pick_n % len(OVERPASS)]
+    status = "error"
+    try:
+        r = await client.post(url, data={"data": q}, timeout=op_timeout + 15,
+                              headers={"User-Agent": "uk-transit-live/0.1"})
+        status = str(r.status_code)
+        if r.status_code == 200:
+            result = _route(r.json().get("elements", []), a, b)
+            status = "ok" if result else "no-route"
+    except Exception as e:
+        status = type(e).__name__
+    _log(key, f"{status} span={span:.2f}")
     # Persist successes only; failures stay in memory with a retry-after so
     # transient Overpass hiccups don't leave corridors straight forever.
     if result:
@@ -180,13 +208,26 @@ async def _consume_one(client: httpx.AsyncClient) -> None:
 
 
 async def worker(client: httpx.AsyncClient) -> None:
-    """Background: up to two polite concurrent corridor fetches."""
+    """Background corridor resolver: instant local routing once the national
+    graph is built; single-flight polite Overpass before that."""
     while True:
-        if _pending and _inflight < 2:
+        if _pending and railnet.ready():
+            if _inflight < 2:
+                asyncio.create_task(_consume_one(client))
+            await asyncio.sleep(0.15)
+        elif _pending and _inflight < 1:
             asyncio.create_task(_consume_one(client))
-            await asyncio.sleep(1.2)   # Overpass fair-use spacing
+            await asyncio.sleep(6)     # Overpass fair-use spacing (interim only)
         else:
             await asyncio.sleep(0.8)
+
+
+def _log(key: str, msg: str) -> None:
+    try:
+        with open(CACHE_DIR.parent / "railpath.log", "a", encoding="utf-8") as f:
+            f.write(_time.strftime("%H:%M:%S") + " " + key + " " + msg + chr(10))
+    except Exception:
+        pass
 
 
 def stats() -> dict:
