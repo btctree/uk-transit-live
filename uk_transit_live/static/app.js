@@ -225,7 +225,7 @@ function renderDisruptions() {
  *   London network -> Metro / Train / Tram / Ferry (line rows with status)
  *   Cities - live buses (fly-to rows with live counts)
  * Click a group header to open/close; click a line row to show its route. */
-state.treeOpen = state.treeOpen || new Set(["nr", "london", "tube"]);
+state.treeOpen = state.treeOpen || new Set(["nr", "cities", "london", "tube"]);
 
 function renderLineList(status) {
   const el = $("linelist");
@@ -261,23 +261,57 @@ function renderLineList(status) {
 
   let nr = 0;
   for (const k of state.vehicles.keys()) if (k.startsWith("nr|")) nr++;
+  // live vs scheduled (non-GPS) — honest split, counted from the live model
+  let liveBus = 0, ghostBus = 0;
+  for (const v of state.vehicles.values()) {
+    if (v.family === "bods") liveBus++;
+    else if (v.family === "ghost") ghostBus++;
+  }
+  const natLive = state.busTotal || 0;
   const cityRows = CITIES.map(([name, la, lo]) => {
     const n = state.cityCounts && state.cityCounts[name];
     return `<div class="linerow cityrow" data-city="${la},${lo}">
       <div class="linemeta"><div class="linename">${escapeHtml(name)}</div></div>
-      <div class="citycount">${n ? "\u2248" + n.toLocaleString() + " \ud83d\ude8c" : ""}</div></div>`;
+      <div class="citycount">${n ? "≈" + n.toLocaleString() + " 🚌" : ""}</div></div>`;
   }).join("");
 
+  const TOC_COLOURS = { "Avanti West Coast": "#00494f", "LNER": "#ce0e2d", "Great Western Railway": "#0a493e",
+    "CrossCountry": "#b7245c", "Northern": "#262262", "ScotRail": "#1e4d8c", "TransPennine Express": "#09a4ec",
+    "East Midlands Railway": "#703e6f", "West Midlands Trains": "#9d6812", "LNR & WMR": "#9d6812",
+    "Southeastern": "#389cff", "Southern": "#8cc63e", "Thameslink": "#e9438d", "Great Northern": "#0099a9",
+    "Greater Anglia": "#d70428", "c2c": "#b7007c", "Chiltern Railways": "#00bfff", "South Western Railway": "#24398c",
+    "Transport for Wales": "#ff4500", "Caledonian Sleeper": "#1d2e5b", "Merseyrail": "#fff200", "Elizabeth Line": "#6950a1",
+    "London Overground": "#ee7623", "Heathrow Express": "#532e63", "Grand Central": "#1f1a17", "Hull Trains": "#de005c",
+    "Lumo": "#2b6ef5", "Island Line": "#24398c" };
+  const opCounts = new Map();
+  for (const v of state.vehicles.values()) {
+    if (v.family === "nr") opCounts.set(v.label, (opCounts.get(v.label) || 0) + 1);
+  }
+  const opsSorted = [...opCounts.entries()].sort((a, b) => b[1] - a[1]);
+  const shown = state.showAllOps ? opsSorted : opsSorted.slice(0, 6);
+  const opRows = shown.map(([op, n]) => `
+    <div class="linerow oprow${state.opDim === op ? " opsel" : ""}" data-op="${escapeHtml(op)}">
+      <div class="chip" style="background:${escapeHtml(TOC_COLOURS[op] || "#5b6773")}"></div>
+      <div class="linemeta"><div class="linename">${escapeHtml(op)}</div></div>
+      <div class="citycount">${n}</div>
+    </div>`).join("") +
+    (opsSorted.length > 6 && !state.showAllOps
+      ? `<div class="linerow" data-allops="1"><div class="linemeta"><div class="reason">Show all ${opsSorted.length} operators…</div></div></div>` : "");
+
   el.innerHTML =
-    grpH("nr", `\ud83d\ude84 National Rail \u2014 ${nr} trains tracked`,
-      '<div class="hint" style="padding:4px 8px 8px">Yellow trains run across the whole map. Click any train for its calling points and delay.</div>') +
-    grpH("london", "London network",
-      mk("tube", "\u24c2 Metro \u2014 Underground", ["tube"]) +
-      mk("lrail", "\ud83d\ude86 Train \u2014 Elizabeth \u00b7 DLR \u00b7 Overground", ["elizabeth-line", "dlr", "overground"]) +
-      mk("tram", "\ud83d\ude8a Tram", ["tram"]) +
-      mk("ferry", "\u26f4 Ferry \u2014 river bus", ["river-bus"])) +
-    grpH("cities", "Cities \u2014 live buses",
-      '<div class="hint" style="padding:4px 8px 4px">Tap a city to fly there. Buses live everywhere in England; Scotland/Wales have timetables + sparse live.</div>' + cityRows);
+    grpH("nr", `\🚄 National Rail — ${nr} trains · live data`,
+
+      '<div class="hint" style="padding:4px 8px 6px">Click any train for its route, calling points and delay. Solid = live data (position estimated between stations — the railway publishes no GPS).</div>'
+      + '<div class="hint" style="padding:0 8px 4px;font-weight:600">By operator</div>' + opRows) +
+    grpH("cities", "🌇 Cities — Bus / Tram / Metro",
+      `<div class="gpsline"><span class="livechip">● live GPS</span> ${natLive.toLocaleString()} buses across England` +
+      (liveBus + ghostBus ? `<br><span style="opacity:.75">in current view: ${liveBus.toLocaleString()} live · ${ghostBus.toLocaleString()} scheduled (translucent — no GPS published)</span>` : "") + "</div>" +
+      grpH("london", "London — full network",
+        mk("tube", "Ⓜ Metro — Underground", ["tube"]) +
+        mk("lrail", "🚆 Train — Elizabeth · DLR · Overground", ["elizabeth-line", "dlr", "overground"]) +
+        mk("tram", "🚊 Tram", ["tram"]) +
+        mk("ferry", "⛴ Ferry — river bus", ["river-bus"])) +
+      '<div class="hint" style="padding:6px 8px 4px">Other cities — tap to fly there:</div>' + cityRows);
 }
 
 // One delegated handler wires the whole tree.
@@ -296,6 +330,23 @@ $("linelist").addEventListener("click", (ev) => {
     const g = head.parentElement.dataset.grp;
     if (state.treeOpen.has(g)) state.treeOpen.delete(g);
     else state.treeOpen.add(g);
+    renderLineList(state.lines);
+    return;
+  }
+  const allops = ev.target.closest("[data-allops]");
+  if (allops) { state.showAllOps = true; renderLineList(state.lines); return; }
+  const oprow = ev.target.closest(".oprow");
+  if (oprow) {
+    const op = oprow.dataset.op;
+    state.opDim = state.opDim === op ? null : op;
+    const pts = [];
+    for (const v of state.vehicles.values()) {
+      if (v.family !== "nr") continue;
+      const el2 = v.marker && v.marker.getElement();
+      if (el2) el2.style.opacity = (!state.opDim || v.label === state.opDim) ? "" : "0.14";
+      if (state.opDim && v.label === state.opDim) pts.push([v.b.lat, v.b.lon]);
+    }
+    if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2), { animate: false });
     renderLineList(state.lines);
     return;
   }
@@ -694,9 +745,29 @@ async function highlightRoute(lineId) {
   }
 }
 
+let journeyLayer = null;
+function drawJourney(route, dots) {
+  clearJourney();
+  if (!route || route.length < 2) return;
+  journeyLayer = L.layerGroup();
+  L.polyline(route, { color: "#20262e", weight: 6, opacity: 0.55 }).addTo(journeyLayer);
+  L.polyline(route, { color: "#F5C518", weight: 3, opacity: 0.95 }).addTo(journeyLayer);
+  for (const p of (dots || [])) {
+    L.circleMarker([p.lat, p.lon], {
+      radius: 4.5, color: "#20262e", weight: 1.5,
+      fillColor: p.passed ? "#8b96a5" : "#ffffff", fillOpacity: 1,
+    }).addTo(journeyLayer).bindTooltip(escapeHtml(p.name), { direction: "top" });
+  }
+  journeyLayer.addTo(map);
+}
+function clearJourney() {
+  if (journeyLayer) { map.removeLayer(journeyLayer); journeyLayer = null; }
+}
+
 function clearHighlight() {
   if (highlightLayer) { map.removeLayer(highlightLayer); highlightLayer = null; }
   if (highlighted) { highlighted = null; setLineEmphasis(null); }
+  clearJourney();
 }
 map.on("popupclose", clearHighlight);
 
@@ -706,6 +777,7 @@ async function vehicleDetailHtml(family, v) {
   try {
     if (family === "nr" && v.id) {
       const d = await api(`/api/rail/train/${v.id}`);
+      drawJourney(d.route, d.callingPoints);
       head = `<b>${escapeHtml(d.operator || "Train")}</b> → ${escapeHtml(d.dest || "?")}`;
       rows = d.stops.map((s, i) =>
         popRow(s.name, s.mins <= 0 ? "now" : `${s.mins} min`, i === d.stops.length - 1)).join("");

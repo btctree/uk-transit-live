@@ -343,4 +343,21 @@ def train_detail(sid: str) -> dict | None:
         for p in svc["timeline"]
         if p["t"] >= now - 60
     ]
-    return {"dest": svc["dest"], "operator": svc["operator"], "stops": stops}
+    # Full journey polyline: chain the cached track corridors (straight-line
+    # fallback per missing pair). Powers click-a-train route reveal.
+    from . import railpath
+    tl = svc["timeline"]
+    pts: list = []
+    dots = []
+    for i in range(len(tl) - 1):
+        p, q = tl[i], tl[i + 1]
+        seg = railpath.get(p["crs"], q["crs"], p["lat"], p["lon"], q["lat"], q["lon"])             or [[p["lat"], p["lon"]], [q["lat"], q["lon"]]]
+        pts.extend(seg if not pts else seg[1:])
+    for p in tl:
+        dots.append({"lat": p["lat"], "lon": p["lon"], "name": p["name"],
+                     "passed": p["t"] < now})
+    if len(pts) > 1500:
+        stride = len(pts) // 1500 + 1
+        pts = pts[::stride] + [pts[-1]]
+    return {"dest": svc["dest"], "operator": svc["operator"], "stops": stops,
+            "route": pts, "callingPoints": dots}

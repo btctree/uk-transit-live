@@ -319,3 +319,9 @@ body.zl-s .vsvg.vsvg-train { width: calc(var(--cars, 4) * 4.5px); }
 
 /* timetable ghosts: clearly not live */
 .vbox.ghost { opacity: .42; filter: saturate(.55); }
+
+.gpsline { font-size: 11px; color: var(--muted); padding: 4px 8px 8px; line-height: 1.6; }
+.tgroup .tgroup { margin-left: 10px; }
+
+.oprow.opsel { background: var(--panel2); outline: 1px solid var(--accent); }
+.citycount { font-size: 11px; color: var(--muted); }
