@@ -7,6 +7,7 @@ is still unfetched the frontend keeps the straight-line fallback.
 """
 import asyncio
 import heapq
+import time as _time
 import json
 import math
 from pathlib import Path
@@ -20,8 +21,10 @@ OVERPASS = ["https://overpass-api.de/api/interpreter",
             "https://overpass.kumi.systems/api/interpreter"]
 
 _mem: dict[str, list | None] = {}     # pair key -> oriented A->B path | None(=failed)
+_fail_at: dict[str, float] = {}       # pair key -> last failure time (retry later)
 _pending: dict[str, tuple] = {}       # pair key -> (aLat, aLon, bLat, bLon)
-_inflight = False
+_inflight = 0
+RETRY_AFTER = 900                     # seconds before re-attempting a failed corridor
 
 
 def _key(a_crs: str, b_crs: str) -> str:
@@ -45,11 +48,12 @@ def get(a_crs, b_crs, a_lat, a_lon, b_lat, b_lon):
     """Oriented A->B track polyline if cached; queue a fetch otherwise."""
     key = _key(a_crs, b_crs)
     hit = _load(key)
-    if hit == "missing":
-        if len(_pending) < 200:
+    if hit == "missing" or (hit is None and _time.time() - _fail_at.get(key, 0) > RETRY_AFTER):
+        if len(_pending) < 400:
             _pending.setdefault(key, (a_lat, a_lon, b_lat, b_lon))
-        return None
-    if not hit:
+        if hit == "missing":
+            return None
+    if not hit or hit == "missing":
         return None
     path = hit
     # orient: cached path runs low-CRS -> high-CRS; flip if caller is reversed
@@ -130,38 +134,49 @@ async def _fetch_pair(client: httpx.AsyncClient, key: str, coords: tuple) -> Non
     pad_lat = max(0.04, (n - s) * 0.35)
     pad_lon = max(0.06, (e - w) * 0.35)
     bbox = f"{s - pad_lat},{w - pad_lon},{n + pad_lat},{e + pad_lon}"
-    q = f'[out:json][timeout:30];way["railway"~"^(rail|light_rail)$"]({bbox});(._;>;);out body;'
+    q = f'[out:json][timeout:50];way["railway"~"^(rail|light_rail)$"]({bbox});(._;>;);out body;'
     result = None
     for url in OVERPASS:
         try:
-            r = await client.post(url, data={"data": q}, timeout=45,
+            r = await client.post(url, data={"data": q}, timeout=60,
                                   headers={"User-Agent": "uk-transit-live/0.1"})
             if r.status_code == 200:
                 result = _route(r.json().get("elements", []), a, b)
                 break
         except Exception:
             continue
-    # stored orientation is irrelevant: get() re-orients by endpoint distance
-    (CACHE_DIR / f"{key}.json").write_text(json.dumps(result), encoding="utf-8")
+    # Persist successes only; failures stay in memory with a retry-after so
+    # transient Overpass hiccups don't leave corridors straight forever.
+    if result:
+        (CACHE_DIR / f"{key}.json").write_text(json.dumps(result), encoding="utf-8")
+    else:
+        _fail_at[key] = _time.time()
     _mem[key] = result
 
 
-async def worker(client: httpx.AsyncClient) -> None:
-    """Background: fetch one pending corridor at a time, politely."""
+async def _consume_one(client: httpx.AsyncClient) -> None:
     global _inflight
+    # shortest corridor first: quick wins, and short urban hops look worst when straight
+    key = min(_pending, key=lambda k: _dist_m(_pending[k][:2], _pending[k][2:]))
+    coords = _pending.pop(key)
+    _inflight += 1
+    try:
+        await _fetch_pair(client, key, coords)
+    except Exception:
+        _fail_at[key] = _time.time()
+        _mem[key] = None
+    finally:
+        _inflight -= 1
+
+
+async def worker(client: httpx.AsyncClient) -> None:
+    """Background: up to two polite concurrent corridor fetches."""
     while True:
-        if _pending and not _inflight:
-            _inflight = True
-            key, coords = next(iter(_pending.items()))
-            _pending.pop(key, None)
-            try:
-                await _fetch_pair(client, key, coords)
-            except Exception:
-                _mem[key] = None
-            _inflight = False
-            await asyncio.sleep(2)   # Overpass fair-use spacing
+        if _pending and _inflight < 2:
+            asyncio.create_task(_consume_one(client))
+            await asyncio.sleep(1.2)   # Overpass fair-use spacing
         else:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.8)
 
 
 def stats() -> dict:

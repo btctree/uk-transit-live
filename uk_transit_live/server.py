@@ -44,6 +44,8 @@ async def lifespan(app: FastAPI):
     stops_task = asyncio.create_task(naptan.ensure(app.state.client))
     # v2 timetable engine: pre-build the user's home region; others build lazily.
     gtfs_task = asyncio.create_task(gtfs.ensure_region(app.state.client, "north_west"))
+    for _r in ("scotland", "wales"):
+        asyncio.create_task(gtfs.ensure_region(app.state.client, _r))
     # Track-geometry worker: snaps trains onto real OSM rail corridors, lazily.
     rail_task = asyncio.create_task(railpath.worker(app.state.client))
     yield
@@ -191,6 +193,29 @@ async def vehicle_journey(line: str, origin: str, dep: str, lat: float, lon: flo
     stops = await asyncio.to_thread(gtfs.trip_stops, region, trip_id)
     delay = await asyncio.to_thread(gtfs.delay_for_position, region, trip_id, lat, lon)
     return {"matched": True, "tripId": trip_id, "delaySecs": delay, "stops": stops}
+
+
+@app.get("/api/ghosts")
+async def ghost_vehicles(minLon: float, minLat: float, maxLon: float, maxLat: float):
+    """Timetable-positioned vehicles for areas without live GPS (translucent
+    on the map). Live-tracked trips are excluded so nothing shows twice."""
+    if (maxLon - minLon) * (maxLat - minLat) > 1.2:
+        return []   # viewport too wide for ghost detail
+    regions = set()
+    for lat, lon in ((minLat, minLon), (minLat, maxLon), (maxLat, minLon),
+                     (maxLat, maxLon), ((minLat + maxLat) / 2, (minLon + maxLon) / 2)):
+        r = gtfs.region_for(lat, lon)
+        if r:
+            regions.add(r)
+    live = await bods.trip_positions(app.state.client) if bods.enabled() else {}
+    exclude = set(live.keys())
+    out = []
+    for r in regions:
+        if gtfs.status(r) in ("ready", "on-disk"):
+            gtfs._conn(r)
+            out.extend(await asyncio.to_thread(
+                gtfs.ghosts, r, minLon, minLat, maxLon, maxLat, exclude, 200))
+    return out[:300]
 
 
 @app.get("/api/eta")

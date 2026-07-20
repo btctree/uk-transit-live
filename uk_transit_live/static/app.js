@@ -31,7 +31,7 @@ const state = {
   busTotal: 0,
   busShown: 0,
   modeByLine: {},            // lineId -> mode (tube/tram/...)
-  seqs: { tfl: 0, nr: 0, bods: 0 },   // per-family poll counters for vehicle cleanup
+  seqs: { tfl: 0, nr: 0, bods: 0, ghost: 0 },   // per-family poll counters for vehicle cleanup
   nrOn: true,                // national rail trains (works once Darwin key added)
   railStationLayer: null,
   ormLayer: null,            // OpenRailwayMap overlay
@@ -495,8 +495,8 @@ function boatSvg(colour) {
 }
 
 const _iconCache = new Map();
-function vehIcon(kind, colour, flip, cars) {
-  const ck = `${kind}|${colour}|${flip ? 1 : 0}|${cars || 0}`;
+function vehIcon(kind, colour, flip, cars, ghost) {
+  const ck = `${kind}|${colour}|${flip ? 1 : 0}|${cars || 0}|${ghost ? 1 : 0}`;
   let ic = _iconCache.get(ck);
   if (ic) return ic;
   const svg = kind === "bus" ? busSvg(colour) : kind === "tram" ? tramSvg(colour)
@@ -505,7 +505,7 @@ function vehIcon(kind, colour, flip, cars) {
   const w = kind === "train" ? clamp(cars || 4, 2, 9) * 11 : 28;
   ic = L.divIcon({
     className: "vehwrap",
-    html: `<div class="vbox${flip ? " flip" : ""}">${svg}</div>`,
+    html: `<div class="vbox${flip ? " flip" : ""}${ghost ? " ghost" : ""}">${svg}</div>`,
     iconSize: [w, 16],
     iconAnchor: [w / 2, 10],
   });
@@ -561,7 +561,7 @@ function ensureMarker(key, v) {
   const want = inViewPad(pos[0], pos[1]) && state.modeFilter.has(v.kind || "train");
   if (want && !v.marker) {
     const marker = L.marker(pos, {
-      icon: vehIcon(v.kind || "train", v.colour, v.flip, v.cars),
+      icon: vehIcon(v.kind || "train", v.colour, v.flip, v.cars, v.ghost),
       keyboard: false,
     }).addTo(state.vehicleLayer);
     v.marker = marker;
@@ -578,8 +578,8 @@ function ensureMarker(key, v) {
     state.vehicleLayer.removeLayer(v.marker);
     v.marker = null;
   } else if (v.marker) {
-    const ik = `${v.kind}|${v.colour}|${v.flip ? 1 : 0}|${v.cars || 0}`;
-    if (v._iconKey !== ik) { v.marker.setIcon(vehIcon(v.kind, v.colour, v.flip, v.cars)); v._iconKey = ik; }
+    const ik = `${v.kind}|${v.colour}|${v.flip ? 1 : 0}|${v.cars || 0}|${v.ghost ? 1 : 0}`;
+    if (v._iconKey !== ik) { v.marker.setIcon(vehIcon(v.kind, v.colour, v.flip, v.cars, v.ghost)); v._iconKey = ik; }
   }
   applyHeading(v);
 }
@@ -706,6 +706,9 @@ async function vehicleDetailHtml(family, v) {
       const arr = await api(`/api/vehicle/${v.vehId}?line=${encodeURIComponent(v.line || "")}`);
       rows = arr.slice(0, 14).map((s, i) => popRow(s.stop, dueText(s.tts), i === arr.length - 1, s.stopId)).join("");
       if (!rows) rows = '<div class="popnote">No onward predictions right now.</div>';
+    } else if (family === "ghost") {
+      rows = popRow("Scheduled service", (v.dest || "").replace(/_/g, " "), true) +
+        '<div class="popnote">Timetable position — this operator does not publish live GPS here yet, so the bus is drawn where the schedule says it should be.</div>';
     } else if (family === "bods") {
       if (v.operator === "TFLO" && v.vehId) {
         const reg = v.vehId.split("|").pop();
@@ -1466,6 +1469,31 @@ async function refreshBuses() {
     }
   } catch { return; }
   applyTargets("bods", targets);
+  refreshGhosts();
+}
+
+// Timetable "ghost" vehicles: translucent scheduled buses where nobody
+// publishes live GPS (Scotland, Wales, small operators). Clearly non-live.
+async function refreshGhosts() {
+  if (map.getZoom() < DETAIL_ZOOM) { applyTargets("ghost", []); return; }
+  const b = map.getBounds();
+  let gs = [];
+  try { gs = await api(`/api/ghosts?minLon=${b.getWest()}&minLat=${b.getSouth()}&maxLon=${b.getEast()}&maxLat=${b.getNorth()}`); }
+  catch { return; }
+  applyTargets("ghost", gs.map((g) => ({
+    key: g.id,
+    a: g.a,
+    b: g.b,
+    segDur: g.segDur,
+    tAtPoll: g.tts,
+    colour: busColour(g.b.lat, g.b.lon),
+    kind: "bus",
+    ghost: true,
+    label: `Bus ${g.line || ""} (scheduled)`.trim(),
+    dest: g.headsign,
+    nextName: null,
+    currentLocation: null,
+  })));
 }
 
 /* ---------- National Rail (Darwin) ---------- */

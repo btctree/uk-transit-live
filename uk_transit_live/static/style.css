@@ -316,3 +316,6 @@ body.zl-s .vsvg.vsvg-train { width: calc(var(--cars, 4) * 4.5px); }
 .pulse { animation: pulsering 1.2s ease-out infinite; }
 @keyframes pulsering { 0% { opacity: 1; } 100% { opacity: .25; } }
 .svc-times { padding: 2px; }
+
+/* timetable ghosts: clearly not live */
+.vbox.ghost { opacity: .42; filter: saturate(.55); }

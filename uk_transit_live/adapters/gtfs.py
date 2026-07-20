@@ -330,3 +330,85 @@ def departures(region: str, stop_id: str, live_positions: dict,
             break
     out.sort(key=lambda x: x["expectedSecs"])
     return out
+
+
+_ghost_cache: dict[str, tuple[float, list]] = {}
+
+
+def ghosts(region: str, min_lon: float, min_lat: float, max_lon: float, max_lat: float,
+           exclude: set, limit: int = 250) -> list[dict]:
+    """Timetable-positioned ("ghost") vehicles for areas without live GPS.
+
+    Scheduled trips currently between two stops in the viewport, interpolated
+    along the timetable — clearly flagged so the UI renders them translucent.
+    """
+    con = _conn(region)
+    if not con:
+        return []
+    ck = f"{region}:{round(min_lon,2)}:{round(min_lat,2)}:{round(max_lon,2)}:{round(max_lat,2)}"
+    hit = _ghost_cache.get(ck)
+    if hit and time.time() - hit[0] < 25:
+        return hit[1]
+
+    now = datetime.now(LONDON_TZ)
+    now_s = _now_secs(now)
+    active = _active_services(region, con, now)
+
+    stop_ids = [r[0] for r in con.execute(
+        "SELECT stop_id FROM stops WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ? LIMIT 600",
+        (min_lat, max_lat, min_lon, max_lon))]
+    if not stop_ids:
+        _ghost_cache[ck] = (time.time(), [])
+        return []
+
+    out = []
+    seen_trips = set()
+    for chunk_start in range(0, len(stop_ids), 300):
+        chunk = stop_ids[chunk_start:chunk_start + 300]
+        q = ",".join("?" * len(chunk))
+        trip_ids = [r[0] for r in con.execute(
+            f"SELECT DISTINCT trip_id FROM stop_times WHERE stop_id IN ({q}) "
+            "AND dep BETWEEN ? AND ?", (*chunk, now_s - 2400, now_s + 2400))]
+        trip_ids = [tid for tid in trip_ids if tid not in exclude and tid not in seen_trips][:800]
+        if not trip_ids:
+            continue
+        qt = ",".join("?" * len(trip_ids))
+        meta = {r[0]: (r[1], r[2], r[3]) for r in con.execute(
+            f"SELECT t.trip_id, r.short, t.headsign, t.service_id FROM trips t "
+            f"JOIN routes r ON r.route_id=t.route_id WHERE t.trip_id IN ({qt})", trip_ids)}
+        rows = con.execute(
+            f"SELECT st.trip_id, st.seq, st.arr, st.dep, s.lat, s.lon FROM stop_times st "
+            f"JOIN stops s ON s.stop_id=st.stop_id WHERE st.trip_id IN ({qt}) "
+            "ORDER BY st.trip_id, st.seq", trip_ids).fetchall()
+        by_trip: dict = {}
+        for tid, seq, arr, dep, lat, lon in rows:
+            by_trip.setdefault(tid, []).append((arr, dep, lat, lon))
+        for tid, stops in by_trip.items():
+            m = meta.get(tid)
+            if not m or m[2] not in active or len(stops) < 2:
+                continue
+            for i in range(len(stops) - 1):
+                t0 = stops[i][1] or stops[i][0]
+                t1 = stops[i + 1][0] or stops[i + 1][1]
+                if t0 is None or t1 is None or not (t0 <= now_s <= t1):
+                    continue
+                seen_trips.add(tid)
+                out.append({
+                    "id": tid,
+                    "a": {"lat": stops[i][2], "lon": stops[i][3]},
+                    "b": {"lat": stops[i + 1][2], "lon": stops[i + 1][3]},
+                    "tts": max(0, t1 - now_s),
+                    "segDur": max(30, t1 - t0),
+                    "line": m[0],
+                    "headsign": m[1],
+                })
+                break
+            if len(out) >= limit:
+                break
+        if len(out) >= limit:
+            break
+
+    _ghost_cache[ck] = (time.time(), out)
+    if len(_ghost_cache) > 60:
+        _ghost_cache.clear()
+    return out
