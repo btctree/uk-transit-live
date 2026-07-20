@@ -160,7 +160,7 @@ def route(a, b):
     prev = {}
     pq = [(0.0, start)]
     seen = set()
-    max_expand = 400_000
+    max_expand = 700_000   # must exceed graph size for cross-country nonstops
     while pq and max_expand:
         max_expand -= 1
         _, u = heapq.heappop(pq)
