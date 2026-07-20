@@ -16,7 +16,10 @@ import httpx
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 NET_FILE = DATA_DIR / "railnet.pkl"
 OVERPASS = ["https://overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter"]
+            "https://overpass.kumi.systems/api/interpreter",
+            "https://overpass.private.coffee/api/interpreter",
+            "https://overpass.openstreetmap.fr/api/interpreter",
+            "https://maps.mail.ru/osm/tools/overpass/api/interpreter"]
 UA = {"User-Agent": "uk-transit-live/0.1 (one-time national rail extract)"}
 
 _net = None
@@ -68,25 +71,44 @@ async def build(client: httpx.AsyncClient) -> None:
         lat += 2.0
     _state["tiles_total"] = len(tiles)
 
+    import gzip
+    import json as _json
+    tile_dir = DATA_DIR / "railnet_tiles"
+    tile_dir.mkdir(exist_ok=True)
     for i, (s, w, n, e) in enumerate(tiles):
+        ck = tile_dir / f"tile_{i}.json.gz"
+        if ck.exists():                          # checkpoint: survives restarts
+            try:
+                slim = _json.loads(gzip.decompress(ck.read_bytes()))
+                nodes.update({int(k): tuple(v) for k, v in slim["n"].items()})
+                ways.extend(slim["w"])
+                _state["tiles_done"] = i + 1
+                continue
+            except Exception:
+                pass
         q = (f'[out:json][timeout:150][maxsize:1610612736];'
              f'way["railway"~"^(rail|light_rail)$"]({s},{w},{n},{e});(._;>;);out body;')
-        for attempt in range(3):
-            url = OVERPASS[attempt % len(OVERPASS)]
+        for attempt in range(6):
+            url = OVERPASS[(i + attempt) % len(OVERPASS)]  # spread tiles across mirrors
             try:
                 r = await client.post(url, data={"data": q}, timeout=200, headers=UA)
                 if r.status_code == 200:
+                    tn, tw = {}, []
                     for el in r.json().get("elements", []):
                         if el["type"] == "node":
-                            nodes[el["id"]] = (el["lat"], el["lon"])
+                            tn[el["id"]] = (el["lat"], el["lon"])
                         elif el["type"] == "way":
-                            ways.append(el["nodes"])
+                            tw.append(el["nodes"])
+                    nodes.update(tn)
+                    ways.extend(tw)
+                    ck.write_bytes(gzip.compress(_json.dumps(
+                        {"n": {str(k): v for k, v in tn.items()}, "w": tw}).encode()))
                     break
-                await asyncio.sleep(60)          # 429/504: give the server air
+                await asyncio.sleep(20)
             except Exception:
-                await asyncio.sleep(30)
+                await asyncio.sleep(10)
         _state["tiles_done"] = i + 1
-        await asyncio.sleep(12)                  # polite gap between tiles
+        await asyncio.sleep(4)
 
     def _assemble():
         adj: dict = {}

@@ -138,8 +138,8 @@ body.zl-m .vsvg { width: 18px; }
 body.zl-s .vsvg { width: 12px; }
 /* trains grow with their real carriage count */
 .vsvg.vsvg-train { width: calc(var(--cars, 4) * 11px); }
-body.zl-m .vsvg.vsvg-train { width: calc(var(--cars, 4) * 7px); }
-body.zl-s .vsvg.vsvg-train { width: calc(var(--cars, 4) * 4.5px); }
+body.zl-m .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 5) * 7px); }
+body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
 
 /* live city chips (country view) */
 .chipwrap { background: none; border: none; }

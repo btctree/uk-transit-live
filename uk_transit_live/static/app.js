@@ -617,7 +617,8 @@ function applyHeading(v) {
 
 function ensureMarker(key, v) {
   const pos = positionOf(v, clock());
-  const want = inViewPad(pos[0], pos[1]) && state.modeFilter.has(v.kind || "train");
+  let want = inViewPad(pos[0], pos[1]) && state.modeFilter.has(v.kind || "train");
+  if (want && v.kind === "train" && (state.trainStep || 1) > 1 && strHash(key) % state.trainStep !== 0) want = false;
   if (want && !v.marker) {
     const marker = L.marker(pos, {
       icon: vehIcon(v.kind || "train", v.colour, v.flip, v.cars, v.ghost),
@@ -644,6 +645,14 @@ function ensureMarker(key, v) {
 }
 
 function syncMarkers() {
+  const z = map.getZoom();
+  const cap = z >= 13 ? Infinity : z >= 11 ? 250 : 120;
+  let trains = 0;
+  const b = map.getBounds().pad(0.25);
+  for (const v of state.vehicles.values()) {
+    if (v.kind === "train" && v.b && b.contains([v.b.lat, v.b.lon])) trains++;
+  }
+  state.trainStep = trains > cap ? Math.ceil(trains / cap) : 1;
   for (const [key, v] of state.vehicles) ensureMarker(key, v);
 }
 map.on("moveend", syncMarkers);
@@ -665,6 +674,7 @@ function applyTargets(family, targets) {
     }
   }
   updateCounter();
+  syncMarkers();
 }
 
 /* Rich click-through detail per vehicle: onward stops + expected times where
@@ -857,7 +867,21 @@ async function vehicleDetailHtml(family, v) {
   return `<div class="pop"><div class="pophead">${head}</div>${rows}</div>`;
 }
 
+function updateGpsLine() {
+  const gl = document.querySelector(".gpsline");
+  if (!gl) return;
+  let liveBus = 0, ghostBus = 0;
+  for (const v of state.vehicles.values()) {
+    if (v.family === "bods") liveBus++;
+    else if (v.family === "ghost") ghostBus++;
+  }
+  const natLive = state.busTotal || 0;
+  gl.innerHTML = `<span class="livechip">● live GPS</span> ${natLive.toLocaleString()} buses across England` +
+    (liveBus + ghostBus ? `<br><span style="opacity:.75">in current view: ${liveBus.toLocaleString()} live · ${ghostBus.toLocaleString()} scheduled (translucent — no GPS published)</span>` : "");
+}
+
 function updateCounter() {
+  updateGpsLine();
   const z = map.getZoom();
   if (z < DETAIL_ZOOM) {
     // Country view: whole-UK live totals per mode (data keeps polling even
