@@ -238,6 +238,12 @@ def _ingest_board(raw: dict, hub_crs: str, now: datetime) -> None:
         if len(timeline) < 2:
             continue
         timeline.sort(key=lambda x: x["t"])
+        # Pre-queue track corridors for every upcoming hop, so geometry is
+        # already cached by the time the train reaches each segment.
+        from . import railpath
+        for _i in range(len(timeline) - 1):
+            _p, _q = timeline[_i], timeline[_i + 1]
+            railpath.get(_p["crs"], _q["crs"], _p["lat"], _p["lon"], _q["lat"], _q["lon"])
         known = _trains.get(sid)
         try:
             cars = int(s.get("length") or 0) or (known or {}).get("cars")

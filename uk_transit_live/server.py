@@ -195,6 +195,11 @@ async def vehicle_journey(line: str, origin: str, dep: str, lat: float, lon: flo
     return {"matched": True, "tripId": trip_id, "delaySecs": delay, "stops": stops}
 
 
+@app.get("/api/railpaths")
+async def railpath_stats():
+    return railpath.stats()
+
+
 @app.get("/api/ghosts")
 async def ghost_vehicles(minLon: float, minLat: float, maxLon: float, maxLat: float):
     """Timetable-positioned vehicles for areas without live GPS (translucent

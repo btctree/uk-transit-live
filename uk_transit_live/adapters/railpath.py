@@ -134,11 +134,14 @@ async def _fetch_pair(client: httpx.AsyncClient, key: str, coords: tuple) -> Non
     pad_lat = max(0.04, (n - s) * 0.35)
     pad_lon = max(0.06, (e - w) * 0.35)
     bbox = f"{s - pad_lat},{w - pad_lon},{n + pad_lat},{e + pad_lon}"
-    q = f'[out:json][timeout:50];way["railway"~"^(rail|light_rail)$"]({bbox});(._;>;);out body;'
+    # long express corridors need a patient query; short urban hops a quick one
+    span = max(n - s, (e - w) * 0.6)
+    op_timeout = 120 if span > 0.35 else 50
+    q = f'[out:json][timeout:{op_timeout}][maxsize:1073741824];way["railway"~"^(rail|light_rail)$"]({bbox});(._;>;);out body;'
     result = None
     for url in OVERPASS:
         try:
-            r = await client.post(url, data={"data": q}, timeout=60,
+            r = await client.post(url, data={"data": q}, timeout=op_timeout + 20,
                                   headers={"User-Agent": "uk-transit-live/0.1"})
             if r.status_code == 200:
                 result = _route(r.json().get("elements", []), a, b)
@@ -154,10 +157,17 @@ async def _fetch_pair(client: httpx.AsyncClient, key: str, coords: tuple) -> Non
     _mem[key] = result
 
 
+_pick_n = 0
+
 async def _consume_one(client: httpx.AsyncClient) -> None:
-    global _inflight
-    # shortest corridor first: quick wins, and short urban hops look worst when straight
-    key = min(_pending, key=lambda k: _dist_m(_pending[k][:2], _pending[k][2:]))
+    global _inflight, _pick_n
+    # Mostly shortest-first (quick wins), but every third pick takes the oldest
+    # entry so long express corridors are never starved by fresh short ones.
+    _pick_n += 1
+    if _pick_n % 3 == 0:
+        key = next(iter(_pending))
+    else:
+        key = min(_pending, key=lambda k: _dist_m(_pending[k][:2], _pending[k][2:]))
     coords = _pending.pop(key)
     _inflight += 1
     try:
