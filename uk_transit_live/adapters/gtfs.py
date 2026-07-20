@@ -355,7 +355,7 @@ def ghosts(region: str, min_lon: float, min_lat: float, max_lon: float, max_lat:
     active = _active_services(region, con, now)
 
     stop_ids = [r[0] for r in con.execute(
-        "SELECT stop_id FROM stops WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ? LIMIT 600",
+        "SELECT stop_id FROM stops WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?",
         (min_lat, max_lat, min_lon, max_lon))]
     if not stop_ids:
         _ghost_cache[ck] = (time.time(), [])
@@ -369,7 +369,7 @@ def ghosts(region: str, min_lon: float, min_lat: float, max_lon: float, max_lat:
         trip_ids = [r[0] for r in con.execute(
             f"SELECT DISTINCT trip_id FROM stop_times WHERE stop_id IN ({q}) "
             "AND dep BETWEEN ? AND ?", (*chunk, now_s - 2400, now_s + 2400))]
-        trip_ids = [tid for tid in trip_ids if tid not in exclude and tid not in seen_trips][:800]
+        trip_ids = [tid for tid in trip_ids if tid not in exclude and tid not in seen_trips][:1500]
         if not trip_ids:
             continue
         qt = ",".join("?" * len(trip_ids))
@@ -377,12 +377,14 @@ def ghosts(region: str, min_lon: float, min_lat: float, max_lon: float, max_lat:
             f"SELECT t.trip_id, r.short, t.headsign, t.service_id FROM trips t "
             f"JOIN routes r ON r.route_id=t.route_id WHERE t.trip_id IN ({qt})", trip_ids)}
         rows = con.execute(
-            f"SELECT st.trip_id, st.seq, st.arr, st.dep, s.lat, s.lon FROM stop_times st "
+            f"SELECT st.trip_id, st.seq, st.arr, st.dep, s.lat, s.lon, st.stop_id FROM stop_times st "
             f"JOIN stops s ON s.stop_id=st.stop_id WHERE st.trip_id IN ({qt}) "
             "ORDER BY st.trip_id, st.seq", trip_ids).fetchall()
         by_trip: dict = {}
-        for tid, seq, arr, dep, lat, lon in rows:
+        trip_stop_ids: dict = {}
+        for tid, seq, arr, dep, lat, lon, sid in rows:
             by_trip.setdefault(tid, []).append((arr, dep, lat, lon))
+            trip_stop_ids.setdefault(tid, []).append(sid)
         for tid, stops in by_trip.items():
             m = meta.get(tid)
             if not m or m[2] not in active or len(stops) < 2:
@@ -401,6 +403,7 @@ def ghosts(region: str, min_lon: float, min_lat: float, max_lon: float, max_lat:
                     "segDur": max(30, t1 - t0),
                     "line": m[0],
                     "headsign": m[1],
+                    "mode": "tram" if any(s.startswith("9400ZZ") for s in trip_stop_ids.get(tid, ())) else "bus",
                 })
                 break
             if len(out) >= limit:

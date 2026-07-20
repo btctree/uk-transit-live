@@ -207,6 +207,19 @@ async def railpath_stats():
     return st
 
 
+@app.get("/api/ghostcount")
+async def ghost_count(lat: float, lon: float):
+    """Scheduled-vehicle count near a city centre (for country-view chips)."""
+    region = gtfs.region_for(lat, lon)
+    if not region or gtfs.status(region) not in ("ready", "on-disk"):
+        return {"count": 0}
+    gtfs._conn(region)
+    live = await bods.trip_positions(app.state.client) if bods.enabled() else {}
+    gs = await asyncio.to_thread(
+        gtfs.ghosts, region, lon - 0.14, lat - 0.09, lon + 0.14, lat + 0.09, set(live.keys()), 300)
+    return {"count": len(gs)}
+
+
 @app.get("/api/ghosts")
 async def ghost_vehicles(minLon: float, minLat: float, maxLon: float, maxLat: float):
     """Timetable-positioned vehicles for areas without live GPS (translucent

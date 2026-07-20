@@ -83,6 +83,59 @@ $("londonbtn").onclick = () => map.setView(LONDON, 12);
 //   9-12  city view    — small icons (12px)
 //   13-14 district     — medium icons (18px)
 //   15+   street       — full-detail icons (28px)
+const LONDON_ZONES = [
+  ["Westminster", 51.4975, -0.1357], ["City of London", 51.5155, -0.092],
+  ["Camden", 51.539, -0.142], ["Hackney", 51.545, -0.055],
+  ["Stratford", 51.541, -0.003], ["Greenwich", 51.482, 0.005],
+  ["Southwark", 51.475, -0.08], ["Brixton", 51.462, -0.115],
+  ["Wandsworth", 51.457, -0.192], ["Hammersmith", 51.492, -0.223],
+  ["Ealing", 51.513, -0.305], ["Wembley", 51.556, -0.28],
+  ["Islington", 51.545, -0.105], ["Ilford", 51.559, 0.08],
+  ["Croydon", 51.372, -0.098], ["Kingston", 51.412, -0.30],
+  ["Wimbledon", 51.421, -0.207], ["Lewisham", 51.462, -0.01],
+];
+const inLondonBox = (lat, lon) => lat > 51.25 && lat < 51.72 && lon > -0.6 && lon < 0.35;
+
+function londonMidView() {
+  const z = map.getZoom();
+  if (z < DETAIL_ZOOM || z >= 13) return false;
+  const b = map.getBounds();
+  return b.getSouth() < 51.72 && b.getNorth() > 51.25 && b.getWest() < 0.35 && b.getEast() > -0.6;
+}
+
+// Borough-level summary chips: London at mid zoom is thousands of vehicles —
+// summarise per area (like the country view) and reveal individuals from z13.
+function renderLondonZones() {
+  cityChipLayer.clearLayers();
+  const t0 = clock();
+  const counts = LONDON_ZONES.map(() => ({ bus: 0, train: 0, tram: 0, boat: 0 }));
+  for (const v of state.vehicles.values()) {
+    const pos = positionOf(v, t0);
+    if (!inLondonBox(pos[0], pos[1])) continue;
+    let bi = -1, bd = 0.05;
+    for (let i = 0; i < LONDON_ZONES.length; i++) {
+      const d = Math.hypot(pos[0] - LONDON_ZONES[i][1], (pos[1] - LONDON_ZONES[i][2]) * 0.62);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    if (bi < 0) continue;
+    const k = v.kind === "coach" ? "bus" : (v.kind || "train");
+    if (counts[bi][k] != null) counts[bi][k]++;
+  }
+  LONDON_ZONES.forEach(([name, la, lo], i) => {
+    const c = counts[i];
+    const parts = [c.bus ? `${c.bus} 🚌` : "", c.train ? `${c.train} 🚆` : "",
+                   c.tram ? `${c.tram} 🚊` : "", c.boat ? `${c.boat} ⛴` : ""].filter(Boolean).join(" ");
+    if (!parts) return;
+    const m = L.marker([la, lo], {
+      icon: L.divIcon({ className: "chipwrap",
+        html: `<div class="citychip">${escapeHtml(name)}<span>${parts}</span></div>`, iconSize: null }),
+      keyboard: false,
+    });
+    m.on("click", () => map.setView([la, lo], 14));
+    m.addTo(cityChipLayer);
+  });
+}
+
 function toggleLayer(l, want) {
   if (!l) return;
   const has = map.hasLayer(l);
@@ -98,7 +151,9 @@ function syncZoomUI() {
   toggleLayer(state.vehicleLayer, detail);
   toggleLayer(state.busRouteLayer, detail);
   toggleLayer(state.busStopLayer, detail);
-  if (detail) cityChipLayer.clearLayers();
+  if (detail && !londonMidView()) cityChipLayer.clearLayers();
+  if (londonMidView()) renderLondonZones();
+  syncMarkers();
   updateCounter();
 }
 map.on("zoomend", syncZoomUI);
@@ -619,6 +674,7 @@ function ensureMarker(key, v) {
   const pos = positionOf(v, clock());
   let want = inViewPad(pos[0], pos[1]) && state.modeFilter.has(v.kind || "train");
   if (want && v.kind === "train" && (state.trainStep || 1) > 1 && strHash(key) % state.trainStep !== 0) want = false;
+  if (want && map.getZoom() < 13 && inLondonBox(pos[0], pos[1])) want = false;   // London summarised until z13
   if (want && !v.marker) {
     const marker = L.marker(pos, {
       icon: vehIcon(v.kind || "train", v.colour, v.flip, v.cars, v.ghost),
@@ -880,9 +936,15 @@ function updateGpsLine() {
     (liveBus + ghostBus ? `<br><span style="opacity:.75">in current view: ${liveBus.toLocaleString()} live · ${ghostBus.toLocaleString()} scheduled (translucent — no GPS published)</span>` : "");
 }
 
+let _lzAt = 0;
 function updateCounter() {
   updateGpsLine();
+  if (londonMidView() && clock() - _lzAt > 5000) { _lzAt = clock(); renderLondonZones(); }
   const z = map.getZoom();
+  if (londonMidView()) {
+    $("livecount").textContent = `${state.vehicles.size.toLocaleString()} vehicles live — London summarised by area · zoom in for individual vehicles`;
+    return;
+  }
   if (z < DETAIL_ZOOM) {
     // Country view: whole-UK live totals per mode (data keeps polling even
     // while the markers themselves are hidden at this zoom).
@@ -1526,8 +1588,19 @@ function renderCityChips(d) {
         else if (v.kind === "boat") bo++;
       }
     }
+    state.ghostCounts = state.ghostCounts || {};
+    if (est < 60) {
+      const gc = state.ghostCounts;
+      if (!gc["t:" + name] || Date.now() - gc["t:" + name] > 60000) {
+        gc["t:" + name] = Date.now();
+        api(`/api/ghostcount?lat=${clat}&lon=${clon}`).then((d) => { gc[name] = d.count; }).catch(() => {});
+      }
+    }
+    const sched = state.ghostCounts[name];
     const parts = [est ? `≈${est.toLocaleString()} 🚌` : "", tr ? `${tr} 🚆` : "",
-                   tm ? `${tm} 🚊` : "", bo ? `${bo} ⛴` : ""].filter(Boolean).join(" · ");
+                   tm ? `${tm} 🚊` : "", bo ? `${bo} ⛴` : "",
+                   est < 60 && sched ? `${sched}${sched >= 300 ? "+" : ""} scheduled` : ""]
+                  .filter(Boolean).join(" · ");
     if (!parts) continue;
     const m = L.marker([clat, clon], {
       icon: L.divIcon({
@@ -1602,7 +1675,7 @@ async function refreshGhosts() {
     segDur: g.segDur,
     tAtPoll: g.tts,
     colour: busColour(g.b.lat, g.b.lon),
-    kind: "bus",
+    kind: g.mode === "tram" ? "tram" : "bus",
     ghost: true,
     label: `Bus ${g.line || ""} (scheduled)`.trim(),
     dest: g.headsign,
