@@ -16,10 +16,7 @@ import httpx
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 NET_FILE = DATA_DIR / "railnet.pkl"
 OVERPASS = ["https://overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter",
-            "https://overpass.private.coffee/api/interpreter",
-            "https://overpass.openstreetmap.fr/api/interpreter",
-            "https://maps.mail.ru/osm/tools/overpass/api/interpreter"]
+            "https://overpass.openstreetmap.fr/api/interpreter"]
 UA = {"User-Agent": "uk-transit-live/0.1 (one-time national rail extract)"}
 
 _net = None
@@ -62,13 +59,13 @@ async def build(client: httpx.AsyncClient) -> None:
     nodes: dict = {}
     ways: list = []
     tiles = []
-    lat = 49.8
+    lat = 49.9
     while lat < 58.8:
-        lon = -8.2
+        lon = -7.8
         while lon < 2.0:
-            tiles.append((lat, lon, min(lat + 2.0, 58.8), min(lon + 2.6, 2.0)))
-            lon += 2.6
-        lat += 2.0
+            tiles.append((lat, lon, min(lat + 1.0, 58.8), min(lon + 1.3, 2.0)))
+            lon += 1.3
+        lat += 1.0
     _state["tiles_total"] = len(tiles)
 
     import gzip
@@ -90,8 +87,10 @@ async def build(client: httpx.AsyncClient) -> None:
              f'way["railway"~"^(rail|light_rail)$"]({s},{w},{n},{e});(._;>;);out body;')
         for attempt in range(6):
             url = OVERPASS[(i + attempt) % len(OVERPASS)]  # spread tiles across mirrors
+            _state["now"] = f"tile {i} try {attempt + 1} {url.split('/')[2]}"
             try:
-                r = await client.post(url, data={"data": q}, timeout=200, headers=UA)
+                r = await client.post(url, data={"data": q}, timeout=60, headers=UA)
+                _state["now"] = f"tile {i} {url.split('/')[2]} -> {r.status_code}"
                 if r.status_code == 200:
                     tn, tw = {}, []
                     for el in r.json().get("elements", []):
@@ -104,11 +103,11 @@ async def build(client: httpx.AsyncClient) -> None:
                     ck.write_bytes(gzip.compress(_json.dumps(
                         {"n": {str(k): v for k, v in tn.items()}, "w": tw}).encode()))
                     break
-                await asyncio.sleep(20)
+                await asyncio.sleep(12)
             except Exception:
                 await asyncio.sleep(10)
         _state["tiles_done"] = i + 1
-        await asyncio.sleep(4)
+        await asyncio.sleep(2.5)
 
     def _assemble():
         adj: dict = {}

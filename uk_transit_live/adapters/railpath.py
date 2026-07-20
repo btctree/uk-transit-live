@@ -20,7 +20,7 @@ CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "railpaths"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 OVERPASS = ["https://overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter"]
+            "https://overpass.openstreetmap.fr/api/interpreter"]
 
 _mem: dict[str, list | None] = {}     # pair key -> oriented A->B path | None(=failed)
 _fail_at: dict[str, float] = {}       # pair key -> last failure time (retry later)
@@ -216,6 +216,9 @@ async def worker(client: httpx.AsyncClient) -> None:
                 asyncio.create_task(_consume_one(client))
             await asyncio.sleep(0.15)
         elif _pending and _inflight < 1:
+            if railnet.status().get("status") == "building":
+                await asyncio.sleep(5)   # don't compete with the tile build
+                continue
             asyncio.create_task(_consume_one(client))
             await asyncio.sleep(6)     # Overpass fair-use spacing (interim only)
         else:
