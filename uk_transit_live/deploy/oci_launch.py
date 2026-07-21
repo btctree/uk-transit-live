@@ -18,7 +18,7 @@ VCN_NAME = "uk-transit-vcn"
 INSTANCE_NAME = "uk-transit-live"
 OCPUS = 1
 MEMORY_GB = 6
-RETRY_SLEEP = 45          # seconds between full AD rounds
+RETRY_SLEEP = 90          # seconds between full AD rounds (45s tripped 429s)
 OPEN_PORTS = [22, 80, 443, 8620]
 
 config = oci.config.from_file()
