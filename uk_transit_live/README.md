@@ -61,3 +61,16 @@ Restart the server after editing `.env`.
 - Trams outside London mostly have no open live feeds (West Midlands is the
   exception); Scotland bus mandate lands ~2028; Northern Ireland has none
 - Fares intentionally out of scope (kept free)
+
+
+## Data sources & attribution
+
+- **Powered by TfL Open Data** — contains OS data (c) Crown copyright and
+  database rights 2016, and Geomni UK Map data (c) and database rights 2019.
+- Rail data from **National Rail Enquiries / Rail Delivery Group (Darwin)**
+  via the Rail Data Marketplace.
+- Bus, coach and timetable data (c) Crown copyright — **DfT Bus Open Data
+  Service (BODS)**, Open Government Licence v3.
+- Stop data from **NaPTAN** (c) Crown copyright, OGL v3.
+- Map tiles (c) OpenStreetMap contributors, (c) CARTO.
+- Rail track geometry (c) OpenStreetMap contributors (ODbL).
