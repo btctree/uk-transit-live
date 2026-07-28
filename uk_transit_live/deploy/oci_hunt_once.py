@@ -24,6 +24,14 @@ Nothing sensitive is printed.  Oracle SDK errors are reported as
 type/status/code only - never the exception's full repr, which can carry
 request headers into a world-readable public log.
 
+Compartments matter for blast radius.  Instances are created in, and listed
+from, OCI_COMPARTMENT_ID; the VCN and image are read from
+OCI_NETWORK_COMPARTMENT_ID.  Both default to the tenancy root, which is what
+the laptop uses.  In CI, point OCI_COMPARTMENT_ID at a compartment holding
+nothing but this project: the CI credential can then only create and destroy
+instances there, and cannot touch VMs belonging to other products even if the
+key leaks out of a public run log.
+
 Usage:  python deploy/oci_hunt_once.py --budget-seconds 240
 """
 import argparse
@@ -121,6 +129,13 @@ def main():
         return 1
 
     tenancy = config["tenancy"]
+    # Instances live here; the CI credential needs no rights outside it.
+    compartment = os.environ.get("OCI_COMPARTMENT_ID") or tenancy
+    # The VCN and the Ubuntu image are read from here (read-only rights).
+    net_compartment = os.environ.get("OCI_NETWORK_COMPARTMENT_ID") or tenancy
+    if compartment != tenancy:
+        log("instances scoped to a non-root compartment")
+
     identity = oci.identity.IdentityClient(config)
     vnet = oci.core.VirtualNetworkClient(config)
     compute = oci.core.ComputeClient(config)
@@ -129,7 +144,7 @@ def main():
     for st in LIVE_STATES:
         try:
             existing = compute.list_instances(
-                compartment_id=tenancy, display_name=INSTANCE_NAME,
+                compartment_id=compartment, display_name=INSTANCE_NAME,
                 lifecycle_state=st).data
         except oci.exceptions.ServiceError as e:
             svc_error("cannot list instances", e)
@@ -137,18 +152,20 @@ def main():
         if existing:
             inst = existing[0]
             log(f"instance already exists ({st}) - not launching another")
-            ip = public_ip_of(compute, vnet, tenancy, inst.id) if st == "RUNNING" else None
+            ip = (public_ip_of(compute, vnet, compartment, inst.id)
+                  if st == "RUNNING" else None)
             emit(won="true", fresh="false", ip=ip or "")
             return 0
 
     # ---- network + image --------------------------------------------------
     try:
-        vcn = next(v for v in vnet.list_vcns(compartment_id=tenancy).data
+        vcn = next(v for v in vnet.list_vcns(compartment_id=net_compartment).data
                    if v.display_name == VCN_NAME)
-        subnets = vnet.list_subnets(compartment_id=tenancy, vcn_id=vcn.id).data
+        subnets = vnet.list_subnets(compartment_id=net_compartment,
+                                    vcn_id=vcn.id).data
         subnet = next(s for s in subnets if not s.prohibit_public_ip_on_vnic)
         image = compute.list_images(
-            compartment_id=tenancy, operating_system="Canonical Ubuntu",
+            compartment_id=net_compartment, operating_system="Canonical Ubuntu",
             operating_system_version="24.04", shape="VM.Standard.A1.Flex",
             sort_by="TIMECREATED", sort_order="DESC").data[0]
         ads = identity.list_availability_domains(tenancy).data
@@ -171,7 +188,7 @@ def main():
         ocpus, mem = SHAPE_SIZES[rnd % len(SHAPE_SIZES)]
         rnd += 1
         details = dict(
-            compartment_id=tenancy,
+            compartment_id=compartment,
             display_name=INSTANCE_NAME,
             shape="VM.Standard.A1.Flex",
             shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
@@ -225,7 +242,7 @@ def main():
         inst = oci.wait_until(compute, compute.get_instance(inst.id),
                               "lifecycle_state", "RUNNING",
                               max_wait_seconds=900).data
-        ip = public_ip_of(compute, vnet, tenancy, inst.id)
+        ip = public_ip_of(compute, vnet, compartment, inst.id)
     except Exception as e:                      # noqa: BLE001 - message only
         log(f"launched, but waiting for RUNNING failed: {type(e).__name__}")
         emit(won="true", fresh="true", ip="")

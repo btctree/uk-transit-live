@@ -69,6 +69,12 @@ jobs:
       - name: Hunt for capacity
         id: hunt
         working-directory: uk_transit_live
+        env:
+          # Instances are created here - scope this to a compartment holding
+          # nothing but this project, so a leaked key cannot reach other VMs.
+          OCI_COMPARTMENT_ID: ${{ vars.OCI_COMPARTMENT_ID }}
+          # VCN and image are read from here (read-only).
+          OCI_NETWORK_COMPARTMENT_ID: ${{ vars.OCI_NETWORK_COMPARTMENT_ID }}
         run: |
           python deploy/oci_hunt_once.py \
             --budget-seconds "${{ inputs.budget_seconds || '240' }}"

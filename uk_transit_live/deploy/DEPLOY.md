@@ -34,33 +34,53 @@ free on public repositories, so this costs nothing.
 
 ### One-time setup
 
-1. **Create a restricted OCI user for CI.** Do not use your admin API key: the
-   same tenancy holds your other VMs, and a leaked admin key can terminate
-   them. Give the CI user a policy no wider than:
+1. **Make a compartment for this project.** Identity -> Compartments ->
+   Create, named e.g. `uk-transit`. This is what bounds the damage if the CI
+   credential ever leaks: the instance is created inside it, while the shared
+   VCN stays in root. Instances and subnets may live in different
+   compartments, so nothing has to move.
+
+2. **Create a restricted OCI user for CI.** Do not reuse your admin API key -
+   the same tenancy holds your other products' VMs, and an admin key can
+   terminate them. Create user `ci-hunter`, put it in a group `ci-hunters`,
+   then add a policy in the *root* compartment:
 
    ```
-   Allow group ci-hunters to manage instance-family in compartment <name>
+   Allow group ci-hunters to manage instance-family in compartment uk-transit
+   Allow group ci-hunters to read instance-family in tenancy
+   Allow group ci-hunters to use subnets in tenancy
+   Allow group ci-hunters to use vnics in tenancy
+   Allow group ci-hunters to read virtual-network-family in tenancy
    Allow group ci-hunters to read app-catalog-listing in tenancy
-   Allow group ci-hunters to use subnet in compartment <name>
-   Allow group ci-hunters to use network-security-groups in compartment <name>
-   Allow group ci-hunters to use vnics in compartment <name>
-   Allow group ci-hunters to inspect availability-domains in tenancy
+   Allow group ci-hunters to inspect compartments in tenancy
    ```
 
-2. **Add four repository secrets** (Settings -> Secrets and variables ->
+   Only the first line grants any power to destroy, and it stops at the
+   `uk-transit` compartment. Everything else is read or attach-only.
+
+   On the user page: API keys -> Add API key -> generate, download the private
+   key, and copy the config preview it shows you.
+
+3. **Add four repository secrets** (Settings -> Secrets and variables ->
    Actions). Paste each file's full contents:
 
    | Secret | From |
    |---|---|
-   | `OCI_CONFIG` | `~/.oci/config` for the CI user |
+   | `OCI_CONFIG` | the config preview for the `ci-hunter` user |
    | `OCI_API_KEY` | that user's API private key (`.pem`) |
    | `VM_SSH_KEY` | `~/.ssh/uktransit_vm` - matches the pubkey baked in at launch |
    | `APP_ENV` | `uk_transit_live/.env` |
 
-3. **Optional:** set a repository *variable* `DATA_PAYLOAD_URL` pointing at a
-   tar.gz of the prebuilt `data/` caches (railnet.pkl and friends, ~99 MB -
-   a GitHub Release asset works). Without it the app rebuilds them on first
-   boot, which works but means a long Overpass crawl for the GB rail graph.
+4. **Add one repository variable** (same page, Variables tab):
+   `OCI_COMPARTMENT_ID` = the OCID of the `uk-transit` compartment. Without it
+   the hunt falls back to the tenancy root, which works but throws away the
+   blast-radius limit. OCIDs are identifiers, not secrets, so a variable is
+   the right home for it.
+
+5. **Optional:** set a variable `DATA_PAYLOAD_URL` pointing at a tar.gz of the
+   prebuilt `data/` caches (railnet.pkl and friends, ~99 MB - a GitHub Release
+   asset works). Without it the app rebuilds them on first boot, which works
+   but means a long Overpass crawl for the GB rail graph.
 
 Workflow files cannot be pushed with a token that lacks the `workflow` scope.
 SSH remotes have no such restriction:
