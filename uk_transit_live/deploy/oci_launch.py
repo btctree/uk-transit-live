@@ -16,8 +16,7 @@ PUBKEY = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILJ9TSdQ90KUlQt6klsdTq9O"
           "/RChU8rlcJQw8/1ygl0l uk-transit-deploy")
 VCN_NAME = "uk-transit-vcn"
 INSTANCE_NAME = "uk-transit-live"
-OCPUS = 1
-MEMORY_GB = 6
+SHAPE_SIZES = [(1, 6), (2, 12)]   # alternate per round; both Always Free
 RETRY_SLEEP = 90          # seconds between full AD rounds (45s tripped 429s)
 OPEN_PORTS = [22, 80, 443, 8620]
 
@@ -83,27 +82,31 @@ for st in ("RUNNING", "PROVISIONING", "STARTING"):
         break
 else:
     inst = None
-    details_base = dict(
-        compartment_id=tenancy,
-        display_name=INSTANCE_NAME,
-        shape="VM.Standard.A1.Flex",
-        shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
-            ocpus=OCPUS, memory_in_gbs=MEMORY_GB),
-        source_details=oci.core.models.InstanceSourceViaImageDetails(
-            image_id=image.id),
-        create_vnic_details=oci.core.models.CreateVnicDetails(
-            subnet_id=public_subnet.id, assign_public_ip=True),
-        metadata={"ssh_authorized_keys": PUBKEY},
-    )
     attempt = 0
+    rnd = 0
     while inst is None:
+        ocpus, mem = SHAPE_SIZES[rnd % len(SHAPE_SIZES)]
+        rnd += 1
+        details_base = dict(
+            compartment_id=tenancy,
+            display_name=INSTANCE_NAME,
+            shape="VM.Standard.A1.Flex",
+            shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
+                ocpus=ocpus, memory_in_gbs=mem),
+            source_details=oci.core.models.InstanceSourceViaImageDetails(
+                image_id=image.id),
+            create_vnic_details=oci.core.models.CreateVnicDetails(
+                subnet_id=public_subnet.id, assign_public_ip=True),
+            metadata={"ssh_authorized_keys": PUBKEY},
+        )
         for ad in ads:
             attempt += 1
             try:
                 inst = compute.launch_instance(
                     oci.core.models.LaunchInstanceDetails(
                         availability_domain=ad.name, **details_base)).data
-                log(f"LAUNCHED in {ad.name} after {attempt} attempts: {inst.id}")
+                log(f"LAUNCHED {ocpus}cpu/{mem}gb in {ad.name} "
+                    f"after {attempt} attempts: {inst.id}")
                 break
             except oci.exceptions.ServiceError as e:
                 if e.status == 500 and "capacity" in (e.message or "").lower():
@@ -120,6 +123,12 @@ else:
                         f"{e.code}: {e.message}")
                     if e.status in (400, 401):
                         sys.exit(f"fatal: {e.message}")
+            except (oci.exceptions.RequestException,
+                    oci.exceptions.ConnectTimeout, OSError) as e:
+                # laptop wifi/DNS blip — never die on transient network errors
+                log(f"attempt {attempt}: network error ({type(e).__name__}), "
+                    "retrying in 60s")
+                time.sleep(60)
         if inst is None:
             time.sleep(RETRY_SLEEP)
 
