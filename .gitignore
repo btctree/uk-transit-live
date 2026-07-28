@@ -3,3 +3,8 @@ uk_transit_live/data/
 __pycache__/
 *.pyc
 uk_transit_live/deploy/hunter.log
+uk_transit_live/deploy/guard.log
+# Saved Claude chat transcripts and local recovery notes - this repo is public
+_chat_backup/
+CLAUDE.md
+RECOVERY.md

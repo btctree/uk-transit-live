@@ -1,0 +1,125 @@
+# Hunt for Always Free Arm (A1) capacity in uk-london-1, and deploy the app the
+# moment Oracle gives us a machine.
+#
+# Why a schedule of short runs rather than one long job: Actions jobs are
+# capped at 6 hours and scheduled runs are best-effort, so "run forever" is not
+# on offer.  Twenty-minute intervals with a four-minute hunt keeps this a
+# modest, ordinary use of Actions while still asking Oracle ~1,000 times a day.
+#
+# Hunt and deploy live in ONE job on purpose: ::add-mask:: values are redacted
+# out of cross-job outputs, and splitting them would mean either leaking or
+# losing the address.
+#
+# No pull_request trigger exists here, deliberately.  On a public repository
+# anyone can open a PR from a fork; keeping the triggers to schedule and manual
+# dispatch means fork code can never reach these secrets.
+#
+# NOTE: GitHub disables scheduled workflows after 60 days without repository
+# activity.  If the hunt is still running then, push any commit to re-arm it.
+
+name: A1 capacity hunt
+
+on:
+  schedule:
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+    inputs:
+      budget_seconds:
+        description: Seconds to spend hunting this run
+        default: '240'
+      force_deploy:
+        description: Deploy to the existing instance even if not freshly launched
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a1-hunt
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install OCI SDK
+        run: pip install --quiet --disable-pip-version-check oci
+
+      - name: Write Oracle credentials
+        env:
+          OCI_CONFIG: ${{ secrets.OCI_CONFIG }}
+          OCI_API_KEY: ${{ secrets.OCI_API_KEY }}
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_CONFIG"  > ~/.oci/config
+          printf '%s\n' "$OCI_API_KEY" > ~/.oci/api_key.pem
+          # Point the config at the key we just wrote, whatever path it names.
+          sed -i "s|^key_file=.*|key_file=$HOME/.oci/api_key.pem|" ~/.oci/config
+          chmod 600 ~/.oci/config ~/.oci/api_key.pem
+
+      - name: Hunt for capacity
+        id: hunt
+        working-directory: uk_transit_live
+        run: |
+          python deploy/oci_hunt_once.py \
+            --budget-seconds "${{ inputs.budget_seconds || '240' }}"
+
+      - name: Decide whether to deploy
+        id: gate
+        run: |
+          go=false
+          if [ "${{ steps.hunt.outputs.fresh }}" = "true" ]; then
+            go=true                      # we launched it this run
+          elif [ "${{ inputs.force_deploy }}" = "true" ] \
+            && [ "${{ steps.hunt.outputs.won }}" = "true" ]; then
+            go=true                      # manual retry against an existing VM
+          fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+          echo "won=${{ steps.hunt.outputs.won }} fresh=${{ steps.hunt.outputs.fresh }} deploy=$go"
+
+      - name: Write deploy credentials
+        if: steps.gate.outputs.go == 'true'
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          APP_ENV: ${{ secrets.APP_ENV }}
+        run: |
+          printf '%s\n' "$VM_SSH_KEY" > "$RUNNER_TEMP/vm_key"
+          printf '%s\n' "$APP_ENV"    > "$RUNNER_TEMP/app_env"
+          chmod 600 "$RUNNER_TEMP/vm_key" "$RUNNER_TEMP/app_env"
+
+      - name: Deploy
+        if: steps.gate.outputs.go == 'true'
+        working-directory: uk_transit_live
+        env:
+          SSH_KEY_FILE: ${{ runner.temp }}/vm_key
+          ENV_FILE: ${{ runner.temp }}/app_env
+          DATA_PAYLOAD_URL: ${{ vars.DATA_PAYLOAD_URL }}
+        run: bash deploy/ci_deploy.sh "${{ steps.hunt.outputs.ip }}"
+
+      - name: Report
+        if: always() && steps.hunt.outputs.won == 'true'
+        run: |
+          {
+            echo "## UK Transit Live"
+            echo
+            echo "Oracle gave us a machine."
+            echo
+            echo "- address: <http://${{ steps.hunt.outputs.ip }}:8620>"
+            echo "- launched this run: ${{ steps.hunt.outputs.fresh }}"
+            echo "- deploy attempted: ${{ steps.gate.outputs.go }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Scrub credentials
+        if: always()
+        run: |
+          rm -f ~/.oci/config ~/.oci/api_key.pem \
+                "$RUNNER_TEMP/vm_key" "$RUNNER_TEMP/app_env"
