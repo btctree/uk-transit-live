@@ -34,6 +34,7 @@ on:
 
 permissions:
   contents: read
+  issues: write   # win notification: the winning run opens an issue, which emails the owner
 
 concurrency:
   group: a1-hunt
@@ -123,6 +124,28 @@ jobs:
             echo "- launched this run: ${{ steps.hunt.outputs.fresh }}"
             echo "- deploy attempted: ${{ steps.gate.outputs.go }}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # fresh == true only: every later scheduled run also reports won=true via
+      # the existence guard, and must not open a duplicate issue each 20 min.
+      - name: Open win-notification issue
+        if: always() && steps.hunt.outputs.fresh == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IP: ${{ steps.hunt.outputs.ip }}
+          DEPLOY_RESULT: ${{ steps.gate.outputs.go == 'true' && 'attempted - see the run log for the smoke-test result' || 'not attempted' }}
+        run: |
+          gh api "repos/${{ github.repository }}/issues" \
+            -f title="Oracle A1 VM won - uk-transit-live is up at $IP" \
+            -f body="$(printf '%s\n' \
+              "The capacity hunt succeeded on run ${{ github.run_id }}." \
+              "" \
+              "- App (once deploy finishes): http://$IP:8620" \
+              "- SSH: \`ssh -i ~/.ssh/uktransit_vm ubuntu@$IP\`" \
+              "- Automatic deploy: $DEPLOY_RESULT" \
+              "- Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              "" \
+              "If the deploy failed, re-run from the Actions tab with force_deploy: true." \
+              "Close this issue once confirmed working.")"
 
       - name: Scrub credentials
         if: always()
