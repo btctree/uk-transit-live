@@ -21,7 +21,9 @@ name: A1 capacity hunt
 
 on:
   schedule:
-    - cron: '*/20 * * * *'
+    # Odd minutes on purpose: GitHub's cron queue is most congested at
+    # :00/:20/:40, and */20 was firing roughly hourly with multi-hour gaps.
+    - cron: '7,27,47 * * * *'
   workflow_dispatch:
     inputs:
       budget_seconds:
@@ -77,8 +79,11 @@ jobs:
           # VCN and image are read from here (read-only).
           OCI_NETWORK_COMPARTMENT_ID: ${{ vars.OCI_NETWORK_COMPARTMENT_ID }}
         run: |
+          # Scheduled runs (no inputs) hunt for 15 min: GitHub's cron fires
+          # sparsely and late, so each firing that does happen hunts longer.
+          # Manual dispatch still uses its declared input default (240).
           python deploy/oci_hunt_once.py \
-            --budget-seconds "${{ inputs.budget_seconds || '240' }}"
+            --budget-seconds "${{ inputs.budget_seconds || '900' }}"
 
       - name: Decide whether to deploy
         id: gate
