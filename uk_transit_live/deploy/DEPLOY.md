@@ -89,6 +89,33 @@ SSH remotes have no such restriction:
 git remote set-url origin git@github.com:btctree/uk-transit-live.git
 ```
 
+### The compartment quota wall (Pay As You Go safety)
+
+On a Free Tier account, asking for more than the Always Free allowance is
+simply refused - the tier is a hard wall. On Pay As You Go the same request
+succeeds and bills. Before upgrading, a compartment quota named
+`uk-transit-free-tier-wall` was created in the root compartment so Oracle
+itself enforces the ceiling:
+
+```
+zero compute-core quotas in compartment uk-transit
+zero compute-memory quotas in compartment uk-transit
+set compute-core quota standard-a1-core-count to 2 in compartment uk-transit
+set compute-memory quota standard-a1-memory-count to 12 in compartment uk-transit
+set compute-core quota standard-a1-core-regional-count to 2 in compartment uk-transit
+set compute-memory quota standard-a1-memory-regional-count to 12 in compartment uk-transit
+```
+
+**The last two lines are not optional.** `zero compute-core quotas` also
+zeroes the *regional* counts, and an A1 launch needs both the per-AD and the
+regional quota. Omitting them looks correct - the per-AD quota reads 2 - while
+every single launch fails with `HTTP 400 QuotaExceeded`. This cost one failed
+scheduled run before it was spotted.
+
+Verify with `get_resource_availability` on both `standard-a1-core-count` (per
+AD) and `standard-a1-core-regional-count` (regional): both must be non-zero,
+while a non-free shape such as `standard-e4-core-count` must read 0.
+
 ### Behaviour
 
 - Deploys only when that run *launched* the instance, so a scheduled run can
