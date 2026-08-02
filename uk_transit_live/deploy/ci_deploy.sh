@@ -65,8 +65,17 @@ if [ -n "${DATA_PAYLOAD_URL}" ]; then
     || echo "cache download failed - app will rebuild them itself"
 fi
 
-sudo apt-get update -qq
-sudo apt-get install -y -qq python3-venv > /dev/null
+# A freshly-launched Ubuntu image is still running cloud-init, which holds the
+# apt lock for the first minute or two. Arriving mid-boot means
+# "Could not get lock /var/lib/apt/lists/lock" and a dead deploy - which is
+# exactly what happens when the hunt wins and deploys seconds later.
+echo "-- waiting for cloud-init to finish --"
+sudo cloud-init status --wait 2>/dev/null || true
+# Belt and braces: apt itself waits rather than failing fast if anything
+# (unattended-upgrades) is still holding the lock.
+APT_OPTS="-o DPkg::Lock::Timeout=300"
+sudo apt-get $APT_OPTS update -qq
+sudo apt-get $APT_OPTS install -y -qq python3-venv > /dev/null
 python3 -m venv /opt/uk-transit/venv
 /opt/uk-transit/venv/bin/pip install --quiet --upgrade pip
 /opt/uk-transit/venv/bin/pip install --quiet -r requirements.txt
@@ -76,7 +85,7 @@ for p in 80 443 8620; do
   sudo iptables -C INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null || \
   sudo iptables -I INPUT -p tcp --dport $p -j ACCEPT
 done
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent > /dev/null 2>&1 || true
+sudo DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y -qq iptables-persistent > /dev/null 2>&1 || true
 sudo netfilter-persistent save 2>/dev/null || true
 
 sudo cp deploy/uk-transit.service /etc/systemd/system/uk-transit.service
