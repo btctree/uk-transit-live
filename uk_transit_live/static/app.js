@@ -99,8 +99,11 @@ function setNav(open) {
 }
 $("menubtn").onclick = () => setNav(!document.getElementById("sidebar").classList.contains("open"));
 if ($("sideclose")) $("sideclose").onclick = () => setNav(false);
+// Tapping the map auto-closes the drawer. This MUST go through setNav:
+// removing .open directly leaves body.navopen set, which keeps the floating
+// map bar hidden - the menu button and search box vanish with no way back.
 map.on("click popupopen", () => {
-  if (window.innerWidth <= 480) document.getElementById("sidebar").classList.remove("open");
+  if (window.innerWidth <= 480) setNav(false);
 });
 
 $("ukbtn").onclick = () => map.setView(UK, 6);
@@ -1008,6 +1011,13 @@ async function vehicleDetailHtml(family, v) {
             : popRow(`To: ${destName}`, right, true));
         }
         if (v.operator) bits.push(popRow("Operator", v.operator, false));
+        // SIRI VehicleRef: whatever the operator chooses to publish. Usually a
+        // fleet number, sometimes the registration plate, occasionally opaque.
+        // Labelled "Vehicle" rather than "Plate" because it is not reliably one.
+        if (v.vehId && v.vehId.includes("|")) {
+          const ref = v.vehId.split("|").pop();
+          if (ref && ref !== "?") bits.push(popRow("Vehicle", ref, false));
+        }
         bits.push('<div class="popnote">Times are the operator’s schedule from the live feed. Full stop-by-stop lists need timetable matching — planned as v2.</div>');
         rows = bits.join("");
       }

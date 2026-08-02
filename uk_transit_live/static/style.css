@@ -309,21 +309,33 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
     position: fixed; z-index: 2100;
     top: calc(8px + env(safe-area-inset-top)); left: 10px; right: 10px;
   }
+  /* Frosted rather than solid: the bar floats over a light basemap, so a
+     black slab hides a strip of map and looks bolted on. backdrop-filter
+     keeps text legible over both pale streets and dark parkland. */
+  #maptop input, #maptop button {
+    background: rgba(255,255,255,.72);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+    border: 1px solid rgba(255,255,255,.55);
+    color: #14203a;
+    box-shadow: 0 2px 14px rgba(16,26,40,.22);
+  }
   #maptop input {
     flex: 1; min-width: 0; height: 44px;      /* 44px = Apple's min touch target */
-    background: rgba(23,28,34,.96); color: var(--text);
-    border: 1px solid var(--line); border-radius: 12px;
+    border-radius: 12px;
     padding: 0 13px; font-size: 16px;         /* 16px stops iOS zooming on focus */
-    outline: none; box-shadow: 0 2px 12px rgba(0,0,0,.4);
+    outline: none;
   }
-  #maptop input:focus { border-color: var(--accent); }
+  #maptop input::placeholder { color: rgba(20,32,58,.55); }
+  #maptop input:focus {
+    background: rgba(255,255,255,.93); border-color: var(--accent);
+  }
   #maptop button {
     flex: 0 0 44px; width: 44px; height: 44px; border-radius: 12px;
-    background: rgba(23,28,34,.96); color: #e8ecf1; border: 1px solid var(--line);
-    font-size: 19px; cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,.4);
+    font-size: 19px; cursor: pointer;
   }
   #maptop button#maploc { color: var(--accent); font-size: 17px; }
-  #maptop button#maploc.on { background: var(--accent); color: #fff; }
+  #maptop button#maploc.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   /* The bar owns the top of the screen, so it must yield it back when the
      sidebar slides over - otherwise it sits on top of the sidebar's heading. */
   body.navopen #maptop, body.navopen #mapresults { display: none; }
@@ -338,10 +350,27 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
   #mapresults .busmatch { padding: 12px 13px; font-size: 13.5px; border-bottom: 1px solid var(--line); }
   #mapresults .busmatch:last-child { border-bottom: none; }
 
-  /* Leaflet's zoom buttons default to the top-left, directly under the menu
-     button. Push them below the whole bar instead of overlapping it. */
-  .leaflet-top.leaflet-left { top: calc(60px + env(safe-area-inset-top)); }
-  .leaflet-control-zoom a { width: 38px; height: 38px; line-height: 38px; font-size: 20px; }
+  /* Zoom sits bottom-right: out of the map bar's way at the top, and within
+     thumb reach on a phone rather than stranded in the far corner.
+     Lifted clear of the legend, which owns the very bottom of the screen. */
+  .leaflet-control-zoom {
+    position: fixed; right: 10px; left: auto; top: auto;
+    bottom: calc(58px + env(safe-area-inset-bottom));
+    margin: 0; z-index: 1200;
+  }
+  /* Leaflet ships `.leaflet-touch .leaflet-bar a { width:30px }` at specificity
+     0,2,1 - a plain `.leaflet-control-zoom a` loses to it and the buttons stay
+     30px. Match its specificity to win. */
+  .leaflet-touch .leaflet-control-zoom a,
+  .leaflet-control-zoom a {
+    width: 44px; height: 44px; line-height: 44px; font-size: 22px;
+    background: rgba(255,255,255,.82);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+    color: #14203a; border-color: rgba(255,255,255,.55);
+  }
+  .leaflet-control-zoom a:first-child { border-radius: 12px 12px 0 0; }
+  .leaflet-control-zoom a:last-child { border-radius: 0 0 12px 12px; }
 
   #sideclose {
     display: block; position: absolute; top: 10px; right: 12px; z-index: 5;
