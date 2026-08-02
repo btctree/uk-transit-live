@@ -11,6 +11,10 @@
   --minor: #f1c40f;
   --bad: #e74c3c;
   --accent: #0098D4;
+  /* env() can't be read from JS directly, but a custom property holding it
+     resolves in getComputedStyle - that's how the popup auto-pan padding
+     learns how tall the Dynamic Island is. */
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 html, body { height: 100%; }
@@ -265,16 +269,64 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
 .tgroup.open > .tbody { display: block; }
 .citycount { font-size: 11px; color: var(--good); white-space: nowrap; }
 
-/* ---------- mobile / PWA (iPhone-class screens) ---------- */
-#menubtn {
-  display: none; position: fixed; z-index: 2100;
-  top: calc(10px + env(safe-area-inset-top)); left: 10px;
-  width: 42px; height: 42px; border-radius: 10px; font-size: 19px;
-  background: rgba(23,28,34,.95); color: #e8ecf1; border: 1px solid var(--line);
-  cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,.35);
+/* ---------- your location: Google-Maps-style blue dot ---------- */
+.userdot {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #1a73e8; border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.18), 0 1px 5px rgba(0,0,0,.4);
 }
+.userdot-wrap { background: none; border: none; }
+
+/* ---------- mobile / PWA (iPhone-class screens) ---------- */
+#maptop, #sideclose { display: none; }
+
 @media (max-width: 480px) {
-  #menubtn { display: block; }
+  /* --- the floating map bar --- */
+  #maptop {
+    display: flex; gap: 8px; align-items: center;
+    position: fixed; z-index: 2100;
+    top: calc(8px + env(safe-area-inset-top)); left: 10px; right: 10px;
+  }
+  #maptop input {
+    flex: 1; min-width: 0; height: 44px;      /* 44px = Apple's min touch target */
+    background: rgba(23,28,34,.96); color: var(--text);
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 0 13px; font-size: 16px;         /* 16px stops iOS zooming on focus */
+    outline: none; box-shadow: 0 2px 12px rgba(0,0,0,.4);
+  }
+  #maptop input:focus { border-color: var(--accent); }
+  #maptop button {
+    flex: 0 0 44px; width: 44px; height: 44px; border-radius: 12px;
+    background: rgba(23,28,34,.96); color: #e8ecf1; border: 1px solid var(--line);
+    font-size: 19px; cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,.4);
+  }
+  #maptop button#maploc { color: var(--accent); font-size: 17px; }
+  #maptop button#maploc.on { background: var(--accent); color: #fff; }
+  /* The bar owns the top of the screen, so it must yield it back when the
+     sidebar slides over - otherwise it sits on top of the sidebar's heading. */
+  body.navopen #maptop, body.navopen #mapresults { display: none; }
+
+  #mapresults {
+    display: block; position: fixed; z-index: 2099;
+    top: calc(60px + env(safe-area-inset-top)); left: 10px; right: 10px;
+    background: rgba(23,28,34,.98); border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  }
+  #mapresults:empty { display: none; }
+  #mapresults .busmatch { padding: 12px 13px; font-size: 13.5px; border-bottom: 1px solid var(--line); }
+  #mapresults .busmatch:last-child { border-bottom: none; }
+
+  /* Leaflet's zoom buttons default to the top-left, directly under the menu
+     button. Push them below the whole bar instead of overlapping it. */
+  .leaflet-top.leaflet-left { top: calc(60px + env(safe-area-inset-top)); }
+  .leaflet-control-zoom a { width: 38px; height: 38px; line-height: 38px; font-size: 20px; }
+
+  #sideclose {
+    display: block; position: absolute; top: 10px; right: 12px; z-index: 5;
+    width: 36px; height: 36px; border-radius: 9px; font-size: 22px; line-height: 1;
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+    cursor: pointer;
+  }
   #sidebar {
     position: fixed; top: 0; left: -100%; height: 100dvh; width: 86vw; min-width: 0;
     z-index: 2000; transition: left .25s ease;
@@ -297,6 +349,17 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
     max-height: 55dvh;
   }
   .findrow input { font-size: 16px; }   /* stops iOS auto-zoom on focus */
+
+  /* A long calling-point list would otherwise run off the top of the screen
+     and disappear behind the Dynamic Island. Cap it and let it scroll. */
+  .leaflet-popup-content { max-height: 46dvh; overflow-y: auto; }
+  .pop { min-width: 0; }
+  .popnote { max-width: none; }
+
+  /* Bigger tap targets everywhere touch is involved. */
+  .arr { padding: 10px 4px; }
+  .linerow, .thead { padding: 10px 8px; }
+  .tab { padding: 12px 0; }
 }
 
 /* ---------- UX wave: last-one, walk line, flyable rows, service stars ---------- */

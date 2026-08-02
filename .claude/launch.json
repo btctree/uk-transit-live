@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "uk-transit-live",
-      "runtimeExecutable": "python",
+      "runtimeExecutable": "py",
       "runtimeArgs": ["-m", "uvicorn", "server:app", "--port", "8620", "--app-dir", "uk_transit_live"],
       "port": 8620
     }

@@ -14,9 +14,21 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<button id="menubtn" aria-label="Menu">☰</button>
+<!-- Mobile map bar: menu, search and locate live ON the map, because on a phone
+     the sidebar is closed most of the time and those are the two controls you
+     actually reach for. Hidden entirely on desktop, where the sidebar is
+     always visible. -->
+<div id="maptop">
+  <button id="menubtn" aria-label="Open menu">☰</button>
+  <input id="mapsearch" placeholder="Search street, town or postcode…"
+         autocomplete="off" enterkeyhint="search" aria-label="Search place">
+  <button id="maploc" aria-label="Show my location" title="Show my location">➤</button>
+</div>
+<div id="mapresults"></div>
+
 <div id="sidebar">
   <header>
+    <button id="sideclose" aria-label="Close menu">×</button>
     <h1>UK Transit <span class="live">LIVE</span></h1>
     <div id="sources" class="sources"></div>
     <div class="searchrow findrow">

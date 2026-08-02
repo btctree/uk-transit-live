@@ -41,8 +41,29 @@ const state = {
   stations: [],
 };
 
+/* ---------- touch sizing ----------
+   Leaflet hit-tests a circleMarker against its drawn radius, so a 3px dot that
+   is fine with a mouse is essentially untappable with a fingertip. Scale every
+   marker radius up on touch devices - the dots read slightly larger, which is
+   the right trade on a phone. */
+const TOUCH = window.matchMedia("(pointer: coarse)").matches;
+const tapR = (r) => (TOUCH ? r * 2.1 : r);
+
 /* ---------- map ---------- */
 const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView(UK, 6);
+
+// Popups auto-pan into view, but Leaflet knows nothing about the Dynamic
+// Island or the floating map bar, so a long calling-point list would open
+// underneath both. Reserve that space.
+(function safeAreaPopups() {
+  const css = getComputedStyle(document.documentElement);
+  const safeTop = parseInt(css.getPropertyValue("--safe-top")) || 0;
+  const topPad = TOUCH ? 74 + safeTop : 20;
+  L.Popup.mergeOptions({
+    autoPanPaddingTopLeft: L.point(14, topPad),
+    autoPanPaddingBottomRight: L.point(14, TOUCH ? 90 : 30),
+  });
+})();
 // CARTO Voyager: Google-like styling with the strongest free label hierarchy
 // (city/region names readable at every zoom; Google's own tiles need a billed key).
 L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
@@ -70,7 +91,14 @@ state.ormLayer = L.tileLayer("https://{s}.tiles.openrailwaymap.org/standard/{z}/
 });
 
 // Mobile drawer: the sidebar slides in/out behind a hamburger button.
-$("menubtn").onclick = () => document.getElementById("sidebar").classList.toggle("open");
+// body.navopen hides the floating map bar while the sidebar is over it -
+// otherwise the ☰ button sits on top of the sidebar's own heading.
+function setNav(open) {
+  document.getElementById("sidebar").classList.toggle("open", open);
+  document.body.classList.toggle("navopen", open);
+}
+$("menubtn").onclick = () => setNav(!document.getElementById("sidebar").classList.contains("open"));
+if ($("sideclose")) $("sideclose").onclick = () => setNav(false);
 map.on("click popupopen", () => {
   if (window.innerWidth <= 480) document.getElementById("sidebar").classList.remove("open");
 });
@@ -163,18 +191,70 @@ syncZoomUI();
 // not from panning across Britain.
 $("placesearch").addEventListener("keydown", (e) => { if (e.key === "Enter") searchPlace(); });
 $("placego").onclick = searchPlace;
-$("locbtn").onclick = () => {
-  if (!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(
-    (p) => { state.userPos = [p.coords.latitude, p.coords.longitude]; map.setView(state.userPos, 15); },
-    () => { $("placeresults").innerHTML = '<div class="empty">Couldn\'t get your location.</div>'; },
-    { timeout: 8000 });
-};
+/* ---------- "where am I": a live blue dot, like Google Maps ----------
+   getCurrentPosition alone jumps the map once and forgets you. watchPosition
+   keeps the dot following you, which is what makes it useful while actually
+   travelling. The accuracy ring is drawn from the browser's own estimate, so
+   a poor GPS fix looks uncertain rather than falsely precise. */
+let _userDot = null, _userRing = null, _watchId = null;
 
-async function searchPlace() {
-  const q = $("placesearch").value.trim();
+function drawUserPos(lat, lon, accuracy) {
+  state.userPos = [lat, lon];
+  if (!_userDot) {
+    _userRing = L.circle([lat, lon], {
+      radius: accuracy || 0, color: "#1a73e8", weight: 1,
+      fillColor: "#1a73e8", fillOpacity: 0.12, interactive: false,
+    }).addTo(map);
+    _userDot = L.marker([lat, lon], {
+      icon: L.divIcon({ className: "userdot-wrap", html: '<div class="userdot"></div>',
+                        iconSize: [18, 18], iconAnchor: [9, 9] }),
+      interactive: false, zIndexOffset: 10000,
+    }).addTo(map);
+  } else {
+    _userDot.setLatLng([lat, lon]);
+    _userRing.setLatLng([lat, lon]).setRadius(accuracy || 0);
+  }
+}
+
+function locateMe(el) {
+  if (!navigator.geolocation) {
+    showLocError("This browser has no location support.");
+    return;
+  }
+  if (el) el.classList.add("on");
+  navigator.geolocation.getCurrentPosition(
+    (p) => {
+      drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
+      map.setView(state.userPos, Math.max(map.getZoom(), 15));
+      if (_watchId === null) {
+        _watchId = navigator.geolocation.watchPosition(
+          (q) => drawUserPos(q.coords.latitude, q.coords.longitude, q.coords.accuracy),
+          () => {}, { enableHighAccuracy: true, maximumAge: 10000 });
+      }
+    },
+    (err) => {
+      if (el) el.classList.remove("on");
+      showLocError(err && err.code === 1
+        ? "Location permission denied — enable it in Settings ▸ Safari ▸ Location."
+        : "Couldn't get your location.");
+    },
+    { timeout: 10000, enableHighAccuracy: true });
+}
+
+function showLocError(msg) {
+  const html = `<div class="empty">${msg}</div>`;
+  const m = $("mapresults"); if (m) { m.innerHTML = html; setTimeout(() => { m.innerHTML = ""; }, 5000); }
+  const p = $("placeresults"); if (p) p.innerHTML = html;
+}
+
+$("locbtn").onclick = () => locateMe($("locbtn"));
+
+// Shared by the sidebar search and the floating map bar, so both behave
+// identically instead of drifting apart.
+async function searchPlace(inputId = "placesearch", outId = "placeresults") {
+  const q = $(inputId).value.trim();
   if (!q) return;
-  const el = $("placeresults");
+  const el = $(outId);
   el.innerHTML = '<div class="empty">Searching…</div>';
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&countrycodes=gb&limit=5&q=${encodeURIComponent(q)}`);
@@ -185,10 +265,25 @@ async function searchPlace() {
       const d = document.createElement("div");
       d.className = "busmatch";
       d.textContent = m.display_name.split(",").slice(0, 3).join(",");
-      d.onclick = () => { map.setView([+m.lat, +m.lon], 15); el.innerHTML = ""; };
+      d.onclick = () => {
+        map.setView([+m.lat, +m.lon], 15);
+        el.innerHTML = "";
+        $(inputId).blur();          // dismiss the iOS keyboard so the map is visible
+      };
       el.appendChild(d);
     }
   } catch { el.innerHTML = '<div class="empty">Search failed — try again.</div>'; }
+}
+
+/* ---------- floating map bar (mobile) ---------- */
+if ($("mapsearch")) {
+  $("mapsearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { searchPlace("mapsearch", "mapresults"); $("mapsearch").blur(); }
+  });
+  $("maploc").onclick = () => locateMe($("maploc"));
+  // Tapping the map should clear a stale result list rather than leaving it
+  // floating over the thing you just tried to look at.
+  map.on("click", () => { const m = $("mapresults"); if (m) m.innerHTML = ""; });
 }
 
 // Leaflet can measure the flex container as 0x0 if it lays out before CSS
@@ -459,7 +554,7 @@ function drawGeometry(id, isBus) {
   for (const s of g.stations) {
     if (s.lat == null) continue;
     const m = L.circleMarker([s.lat, s.lon], {
-      radius: isBus ? 3 : 3.5, color: "#fff", weight: 1, fillColor: g.colour, fillOpacity: 1,
+      radius: tapR(isBus ? 3 : 3.5), color: "#fff", weight: 1, fillColor: g.colour, fillOpacity: 1,
     }).addTo(grp);
     m.bindTooltip(escapeHtml(s.name), { direction: "top", opacity: 0.9 });
     m.on("click", () => openBoard(s.naptan || s.id, s.name, s.lat, s.lon));
@@ -802,7 +897,7 @@ async function highlightRoute(lineId) {
     for (const s of g.stations) {
       if (s.lat == null) continue;
       const m = L.circleMarker([s.lat, s.lon], {
-        radius: 4, color: "#fff", weight: 1.2, fillColor: g.colour, fillOpacity: 1,
+        radius: tapR(4), color: "#fff", weight: 1.2, fillColor: g.colour, fillOpacity: 1,
       }).addTo(highlightLayer);
       m.bindTooltip(escapeHtml(s.name), { direction: "top" });
       m.on("click", () => openBoard(s.naptan || s.id, s.name, s.lat, s.lon));
@@ -820,7 +915,7 @@ function drawJourney(route, dots) {
   L.polyline(route, { color: "#F5C518", weight: 3, opacity: 0.95 }).addTo(journeyLayer);
   for (const p of (dots || [])) {
     L.circleMarker([p.lat, p.lon], {
-      radius: 4.5, color: "#20262e", weight: 1.5,
+      radius: tapR(4.5), color: "#20262e", weight: 1.5,
       fillColor: p.passed ? "#8b96a5" : "#ffffff", fillOpacity: 1,
     }).addTo(journeyLayer).bindTooltip(escapeHtml(p.name), { direction: "top" });
   }
@@ -1445,7 +1540,7 @@ async function refreshBusStops() {
     const [id, name, indicator, lat, lon] = s;
     const label = indicator ? `${name} (${indicator})` : name;
     const m = L.circleMarker([lat, lon], {
-      radius: 3.5, color: "#fff", weight: 1, fillColor: "#DC241F", fillOpacity: 0.95,
+      radius: tapR(3.5), color: "#fff", weight: 1, fillColor: "#DC241F", fillOpacity: 0.95,
     }).addTo(state.busStopLayer);
     m.bindTooltip(escapeHtml(label), { direction: "top" });
     m.on("click", () => openBoard(id, label, lat, lon));
@@ -1711,7 +1806,7 @@ function refreshRailStations() {
   for (const s of state.stations) {
     if (s.lat == null || !b.contains([s.lat, s.lon])) continue;
     const m = L.circleMarker([s.lat, s.lon], {
-      radius: 3, color: "#5b6773", weight: 1, fillColor: "#ffffff", fillOpacity: 0.9,
+      radius: tapR(3), color: "#5b6773", weight: 1, fillColor: "#ffffff", fillOpacity: 0.9,
     }).addTo(grp);
     m.bindTooltip(`${escapeHtml(s.name)} (${escapeHtml(s.crs)}) — rail`, { direction: "top" });
     m.on("click", () => {
