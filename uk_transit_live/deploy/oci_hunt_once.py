@@ -47,6 +47,13 @@ VCN_NAME = "uk-transit-vcn"
 INSTANCE_NAME = "uk-transit-live"
 SHAPE_SIZES = [(1, 6), (2, 12)]   # alternate per round; both Always Free
 LIVE_STATES = ("RUNNING", "PROVISIONING", "STARTING")
+# Oracle halved the Always Free Arm allowance in June 2026 (was 4/24).
+# On a Free Tier account, asking for more than this is simply refused - the
+# tier is a hard wall.  On Pay As You Go that same request SUCCEEDS AND BILLS,
+# so the wall has to be rebuilt in code: never launch if doing so would push
+# the tenancy past the free ceiling.
+FREE_OCPU_CEILING = 2
+FREE_MEMORY_CEILING_GB = 12
 OPEN_PORTS = [22, 80, 443, 8620]
 
 
@@ -68,6 +75,34 @@ def emit(**outputs):
 def svc_error(prefix, e):
     """Report a ServiceError without leaking request detail into the log."""
     log(f"{prefix}: HTTP {e.status} {e.code}")
+
+
+def a1_usage(compute, identity, tenancy):
+    """Total A1 OCPUs/GB already allocated anywhere in the tenancy.
+
+    Counted tenancy-wide, not per compartment: the Always Free allowance is a
+    tenancy-level budget, so an A1 sitting in some other compartment spends
+    the same allowance this hunt is trying to use.
+    """
+    ocpus = mem = 0.0
+    comps = [tenancy]
+    try:
+        comps += [c.id for c in oci.pagination.list_call_get_all_results(
+            identity.list_compartments, tenancy,
+            compartment_id_in_subtree=True).data
+            if c.lifecycle_state == "ACTIVE"]
+    except oci.exceptions.ServiceError as e:
+        # Cannot enumerate compartments -> cannot prove we are under the cap.
+        svc_error("cannot list compartments for the free-tier check", e)
+        raise
+    for cid in comps:
+        for inst in compute.list_instances(compartment_id=cid).data:
+            if inst.lifecycle_state in LIVE_STATES and "A1.Flex" in inst.shape:
+                sc = inst.shape_config
+                if sc:
+                    ocpus += sc.ocpus or 0
+                    mem += sc.memory_in_gbs or 0
+    return ocpus, mem
 
 
 def public_ip_of(compute, vnet, tenancy, instance_id):
@@ -187,6 +222,24 @@ def main():
     while inst is None and time.monotonic() < deadline:
         ocpus, mem = SHAPE_SIZES[rnd % len(SHAPE_SIZES)]
         rnd += 1
+
+        # Re-checked every round, not once: a concurrent run, a manual
+        # console launch, or a retry after a half-failed attempt could all
+        # have consumed the allowance since this job started.
+        try:
+            used_o, used_m = a1_usage(compute, identity, tenancy)
+        except oci.exceptions.ServiceError:
+            log("aborting: cannot verify free-tier headroom")
+            emit(won="false", fresh="false", ip="")
+            return 1
+        if (used_o + ocpus > FREE_OCPU_CEILING
+                or used_m + mem > FREE_MEMORY_CEILING_GB):
+            log(f"refusing to launch {ocpus}cpu/{mem}gb: tenancy already uses "
+                f"{used_o:g} OCPU / {used_m:g} GB of A1, ceiling is "
+                f"{FREE_OCPU_CEILING} / {FREE_MEMORY_CEILING_GB} - this would "
+                "be billable on Pay As You Go")
+            emit(won="false", fresh="false", ip="")
+            return 0
         details = dict(
             compartment_id=compartment,
             display_name=INSTANCE_NAME,
