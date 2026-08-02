@@ -43,9 +43,15 @@ async def lifespan(app: FastAPI):
     # GB stop index (NaPTAN): one ~100MB download on first run, then disk cache.
     stops_task = asyncio.create_task(naptan.ensure(app.state.client))
     # v2 timetable engine: pre-build the user's home region; others build lazily.
-    gtfs_task = asyncio.create_task(gtfs.ensure_region(app.state.client, "north_west"))
-    for _r in ("scotland", "wales"):
-        asyncio.create_task(gtfs.ensure_region(app.state.client, _r))
+    # SKIP_GTFS_PREBUILD is for ephemeral hosts (Hugging Face Spaces): the
+    # sqlites are 2.7 GB and would rebuild from scratch on every cold start,
+    # so there they build on demand instead of at boot.
+    if os.environ.get("SKIP_GTFS_PREBUILD") == "1":
+        gtfs_task = asyncio.create_task(asyncio.sleep(0))
+    else:
+        gtfs_task = asyncio.create_task(gtfs.ensure_region(app.state.client, "north_west"))
+        for _r in ("scotland", "wales"):
+            asyncio.create_task(gtfs.ensure_region(app.state.client, _r))
     # Track-geometry worker: snaps trains onto real OSM rail corridors, lazily.
     rail_task = asyncio.create_task(railpath.worker(app.state.client))
     # One-time national rail graph (~15 min of polite tile fetches, then local
