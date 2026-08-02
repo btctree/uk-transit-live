@@ -269,6 +269,28 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
 .tgroup.open > .tbody { display: block; }
 .citycount { font-size: 11px; color: var(--good); white-space: nowrap; }
 
+/* ---------- vehicle tap targets on touch ----------
+   A bus icon is a 28x16px div (12px wide when zoomed out) and Leaflet hit-tests
+   against exactly that box, so hitting a moving bus with a fingertip is close
+   to impossible. Grow the *hit* area with an invisible centred pseudo-element
+   rather than the icon itself: the map looks identical, but the target reaches
+   Apple's 44pt minimum. Scaled down as you zoom out, where vehicles crowd
+   together and an oversized target would grab the wrong one. */
+@media (pointer: coarse) {
+  .vbox { position: relative; }
+  .vbox::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%);
+    pointer-events: auto;
+  }
+  /* Kept at the full 44px through mid zoom: the icons are already ~28-44px
+     WIDE, so this only grows the vertical axis (16px tall) that was the actual
+     problem - it does not make neighbouring vehicles any easier to hit by
+     mistake. Only the far-out view, where icons shrink to 12px and crowd,
+     takes a smaller box. */
+  body.zl-s .vbox::after { width: 32px; height: 32px; }
+}
+
 /* ---------- your location: Google-Maps-style blue dot ---------- */
 .userdot {
   width: 18px; height: 18px; border-radius: 50%;
