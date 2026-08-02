@@ -34,11 +34,18 @@ done
 
 echo "== packaging app =="
 TAR=$(mktemp -d)/uktransit_payload.tar.gz
-cp "$ENV_FILE" "$APP_DIR/.env"
+# On a runner ENV_FILE is a secret written to RUNNER_TEMP, but run locally it
+# may already BE $APP_DIR/.env - in which case cp errors and kills the deploy.
+if [ "$(readlink -f "$ENV_FILE")" != "$(readlink -f "$APP_DIR/.env")" ]; then
+    cp "$ENV_FILE" "$APP_DIR/.env"
+    ENV_WAS_COPIED=1
+else
+    ENV_WAS_COPIED=0
+fi
 tar -czf "$TAR" -C "$APP_DIR" \
     --exclude='__pycache__' --exclude='*.pyc' \
     server.py requirements.txt .env adapters static deploy
-rm -f "$APP_DIR/.env"
+[ "$ENV_WAS_COPIED" = 1 ] && rm -f "$APP_DIR/.env"
 ls -lh "$TAR"
 
 echo "== copying to server =="
