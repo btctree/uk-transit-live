@@ -855,6 +855,10 @@ async function jumpToStop(stopId, fallbackName) {
   if (!st || st.lat == null) return;
   map.closePopup();
   map.setView([st.lat, st.lon], Math.max(map.getZoom(), 15));
+  // Blink the destination. Jumping the map is disorienting otherwise: you
+  // land somewhere new with no idea which of the stops on screen you asked
+  // for. pulseAt() already existed but nothing on this path ever called it.
+  pulseAt(st.lat, st.lon);
   openBoard(stopId, st.name || fallbackName || "Stop", st.lat, st.lon);
 }
 
@@ -1486,11 +1490,26 @@ $("favlist").addEventListener("click", (ev) => {
 });
 
 // Board rows are doors, not dead ends: tap = see the actual vehicle; star = save the service.
-let _pulse = null;
+let _pulse = null, _pulseTimer = null;
 function pulseAt(lat, lon) {
   if (_pulse) map.removeLayer(_pulse);
-  _pulse = L.circleMarker([lat, lon], { radius: 16, color: "#0098D4", weight: 3, fillOpacity: 0.1, className: "pulse" }).addTo(map);
-  setTimeout(() => { if (_pulse) { map.removeLayer(_pulse); _pulse = null; } }, 5000);
+  if (_pulseTimer) clearTimeout(_pulseTimer);
+  // Blinks for ~2s (4 x 0.5s) then removes itself, so it pulls the eye without
+  // becoming permanent map furniture. interactive:false so it never swallows a
+  // tap meant for the stop underneath it.
+  // A divIcon, not a circleMarker: the map runs preferCanvas:true, so
+  // circleMarkers are painted into a canvas and their `className` never
+  // becomes a DOM node - the CSS animation simply never runs. That is why the
+  // original pulse was invisible even where it was called.
+  _pulse = L.marker([lat, lon], {
+    icon: L.divIcon({ className: "blinkwrap", html: '<div class="blinkring"></div>',
+                      iconSize: [44, 44], iconAnchor: [22, 22] }),
+    interactive: false, zIndexOffset: 9000,
+  }).addTo(map);
+  _pulseTimer = setTimeout(() => {
+    if (_pulse) { map.removeLayer(_pulse); _pulse = null; }
+    _pulseTimer = null;
+  }, 2100);
 }
 $("board-body").addEventListener("click", (ev) => {
   const star = ev.target.closest(".rowstar");
@@ -1549,8 +1568,10 @@ async function refreshBusStops() {
   for (const s of d.stops) {
     const [id, name, indicator, lat, lon] = s;
     const label = indicator ? `${name} (${indicator})` : name;
-    const m = L.circleMarker([lat, lon], {
-      radius: tapR(3.5), color: "#fff", weight: 1, fillColor: "#DC241F", fillOpacity: 0.95,
+    const m = L.marker([lat, lon], {
+      icon: L.divIcon({ className: "stoplabel-wrap",
+        html: '<span class="stoplabel stoplabel-bus">Bus Stop</span>',
+        iconSize: null }),
     }).addTo(state.busStopLayer);
     m.bindTooltip(escapeHtml(label), { direction: "top" });
     m.on("click", () => openBoard(id, label, lat, lon));
@@ -1815,8 +1836,10 @@ function refreshRailStations() {
   let n = 0;
   for (const s of state.stations) {
     if (s.lat == null || !b.contains([s.lat, s.lon])) continue;
-    const m = L.circleMarker([s.lat, s.lon], {
-      radius: tapR(3), color: "#5b6773", weight: 1, fillColor: "#ffffff", fillOpacity: 0.9,
+    const m = L.marker([s.lat, s.lon], {
+      icon: L.divIcon({ className: "stoplabel-wrap",
+        html: '<span class="stoplabel stoplabel-rail">Train</span>',
+        iconSize: null }),
     }).addTo(grp);
     m.bindTooltip(`${escapeHtml(s.name)} (${escapeHtml(s.crs)}) — rail`, { direction: "top" });
     m.on("click", () => {
@@ -1938,22 +1961,9 @@ function renderSources() {
   setInterval(pump, 1000);
   map.on("moveend", () => { if (state.bodsOn) { _due.bus = Date.now(); refreshBuses(); } });
 
-  // Launch to "near me": a commuter's first question is when's MY next one,
-  // not a map of Britain. Silent geolocate -> fly -> open the nearest stop.
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(async (p) => {
-      state.userPos = [p.coords.latitude, p.coords.longitude];
-      map.setView(state.userPos, 15);
-      try {
-        const b = map.getBounds();
-        const d = await api(`/api/stops?minLon=${b.getWest()}&minLat=${b.getSouth()}&maxLon=${b.getEast()}&maxLat=${b.getNorth()}`);
-        if (d.ready && d.stops.length) {
-          const near = d.stops
-            .map((s) => [Math.hypot(s[3] - state.userPos[0], s[4] - state.userPos[1]), s])
-            .sort((x, y) => x[0] - y[0])[0][1];
-          openBoard(near[0], near[2] ? `${near[1]} (${near[2]})` : near[1], near[3], near[4]);
-        }
-      } catch {}
-    }, () => {}, { timeout: 6000 });
-  }
+  // Deliberately no auto-locate on launch. This used to silently geolocate,
+  // fly to you and open the nearest stop's board - so the app opened with a
+  // permission prompt and a popup nobody asked for, over a map you had not
+  // chosen. Locating is now entirely on demand: ➤ on the map bar, or 📍 in
+  // the sidebar.
 })();

@@ -269,6 +269,35 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
 .tgroup.open > .tbody { display: block; }
 .citycount { font-size: 11px; color: var(--good); white-space: nowrap; }
 
+/* ---------- stop / station labels ----------
+   Named plates instead of coloured dots: a red dot means nothing until you tap
+   it, whereas "Bus Stop" says what it is. They are ~10x wider than the dots
+   they replace, so they only ever render at street zoom (bus 14+, rail 10+)
+   where there are few enough on screen to stay readable. Density in a city
+   centre is the known trade-off here. */
+.stoplabel-wrap { background: none; border: none; }
+.stoplabel {
+  display: inline-block; transform: translate(-50%, -50%);
+  font-size: 9.5px; font-weight: 800; line-height: 1; letter-spacing: .2px;
+  padding: 3px 5px; border-radius: 3px; white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3); cursor: pointer;
+}
+.stoplabel-bus  { background: #fff;    color: #DC241F; border: 1.5px solid #DC241F; }
+.stoplabel-rail { background: #9a7400; color: #fff;    border: 1.5px solid #7d5e00; }
+.stoplabel:hover { outline: 2px solid var(--accent); }
+
+/* Blink the stop you jumped to, for ~2s, then pulseAt() removes the ring. */
+.blinkwrap { background: none; border: none; }
+.blinkring {
+  width: 44px; height: 44px; border-radius: 50%; box-sizing: border-box;
+  border: 4px solid #0098D4; background: rgba(0,152,212,.18);
+  animation: blink2s .5s ease-in-out 4;
+}
+@keyframes blink2s {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .15; }
+}
+
 /* ---------- vehicle tap targets on touch ----------
    A bus icon is a 28x16px div (12px wide when zoomed out) and Leaflet hit-tests
    against exactly that box, so hitting a moving bus with a fingertip is close
