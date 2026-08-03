@@ -4,6 +4,7 @@ Free registration: https://data.bus-data.dft.gov.uk/account/signup/ then copy
 the API key (Account settings) into .env as BODS_API_KEY. The SIRI-VM datafeed
 serves vehicle positions refreshed every ~10 seconds.
 """
+import asyncio
 import os
 import time
 import xml.etree.ElementTree as ET
@@ -17,6 +18,18 @@ NS = {"siri": "http://www.siri.org.uk/siri"}
 
 _cache: dict[str, tuple[float, object]] = {}
 NATIONAL_SAMPLE = 2500  # markers a browser can animate comfortably at UK zoom
+
+# One lock per cache key, tfl.cached-style. Without it, every request that
+# arrives after a TTL expires launches its own download AND its own parse of
+# the national feed - and since viewers poll on aligned ~20s timers, they
+# expire together and stampede the single CPU core every window.
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock(key: str) -> asyncio.Lock:
+    if key not in _locks:
+        _locks[key] = asyncio.Lock()
+    return _locks[key]
 
 
 def enabled() -> bool:
@@ -37,17 +50,29 @@ async def vehicles(client: httpx.AsyncClient, min_lon: float, min_lat: float,
     if hit and now - hit[0] < 12:
         return hit[1]
 
-    r = await client.get(
-        FEED,
-        params={
-            "boundingBox": f"{min_lon},{min_lat},{max_lon},{max_lat}",
-            "api_key": os.environ["BODS_API_KEY"].strip(),
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    root = ET.fromstring(r.content)
+    async with _lock(key):
+        hit = _cache.get(key)           # double-check: a peer may have filled it
+        if hit and time.time() - hit[0] < 12:
+            return hit[1]
+        r = await client.get(
+            FEED,
+            params={
+                "boundingBox": f"{min_lon},{min_lat},{max_lon},{max_lat}",
+                "api_key": os.environ["BODS_API_KEY"].strip(),
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        # Multi-MB XML parse runs in a worker thread, off the event loop.
+        out = await asyncio.to_thread(_parse_siri, r.content)
 
+        _cache[key] = (time.time(), out)
+        return out
+
+
+def _parse_siri(content: bytes) -> list[dict]:
+    """Sync SIRI-VM XML -> vehicle dicts; called via asyncio.to_thread."""
+    root = ET.fromstring(content)
     out = []
     for va in root.iter(f"{{{NS['siri']}}}VehicleActivity"):
         mvj = va.find("siri:MonitoredVehicleJourney", NS)
@@ -79,8 +104,6 @@ async def vehicles(client: httpx.AsyncClient, min_lon: float, min_lat: float,
         })
         if len(out) >= 4000:  # keep payloads sane at wide zooms
             break
-
-    _cache[key] = (time.time(), out)
     return out
 
 
@@ -95,14 +118,27 @@ async def national(client: httpx.AsyncClient) -> dict:
     if hit and now - hit[0] < 20:
         return hit[1]
 
-    r = await client.get(
-        "https://data.bus-data.dft.gov.uk/avl/download/gtfsrt",
-        headers={"User-Agent": "uk-transit-live/0.1"},
-        timeout=60,
-        follow_redirects=True,
-    )
-    r.raise_for_status()
-    data = r.content
+    async with _lock("national"):
+        hit = _cache.get("national")    # double-check: a peer may have filled it
+        if hit and time.time() - hit[0] < 20:
+            return hit[1]
+        r = await client.get(
+            "https://data.bus-data.dft.gov.uk/avl/download/gtfsrt",
+            headers={"User-Agent": "uk-transit-live/0.1"},
+            timeout=60,
+            follow_redirects=True,
+        )
+        r.raise_for_status()
+        # Unzip + protobuf parse + fleet-wide dict build is the heaviest CPU
+        # job in the app; it runs in a worker thread, off the event loop.
+        out, trip_positions_map = await asyncio.to_thread(_parse_national, r.content)
+        _cache["trip_positions"] = (time.time(), trip_positions_map)
+        _cache["national"] = (time.time(), out)
+        return out
+
+
+def _parse_national(data: bytes) -> tuple[dict, dict]:
+    """Sync GTFS-RT parse -> (payload, trip positions); via asyncio.to_thread."""
     if data[:2] == b"PK":  # zip wrapper around the protobuf
         import io
         import zipfile
@@ -112,7 +148,7 @@ async def national(client: httpx.AsyncClient) -> dict:
     feed.ParseFromString(data)
 
     all_vehicles = []
-    trip_positions = {}
+    trip_positions_map = {}
     for e in feed.entity:
         v = e.vehicle
         if not v or not v.position or not v.position.latitude:
@@ -126,8 +162,7 @@ async def national(client: httpx.AsyncClient) -> dict:
             "route": v.trip.route_id or None,
         })
         if v.trip.trip_id:
-            trip_positions[v.trip.trip_id] = (v.position.latitude, v.position.longitude)
-    _cache["trip_positions"] = (time.time(), trip_positions)
+            trip_positions_map[v.trip.trip_id] = (v.position.latitude, v.position.longitude)
 
     total = len(all_vehicles)
     if total > NATIONAL_SAMPLE:
@@ -136,9 +171,7 @@ async def national(client: httpx.AsyncClient) -> dict:
     else:
         sampled = all_vehicles
 
-    out = {"total": total, "shown": len(sampled), "vehicles": sampled}
-    _cache["national"] = (time.time(), out)
-    return out
+    return {"total": total, "shown": len(sampled), "vehicles": sampled}, trip_positions_map
 
 
 async def trip_positions(client: httpx.AsyncClient) -> dict:

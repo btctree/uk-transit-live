@@ -52,7 +52,15 @@ async def stations(client: httpx.AsyncClient) -> list[dict]:
     """Station name -> CRS list (community dataset, cached on disk)."""
     f = DATA_DIR / "rail_stations.json"
     if f.exists():
-        return json.loads(f.read_text(encoding="utf-8"))
+        # Inside its own guard: a truncated file (crash or partial copy
+        # mid-write) used to raise JSONDecodeError straight out of poll_loop
+        # and kill national rail tracking until someone deleted the file by
+        # hand. Now a corrupt cache deletes itself and falls through to
+        # re-download.
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            f.unlink(missing_ok=True)
     try:
         r = await client.get(STATIONS_URL, timeout=30, follow_redirects=True)
         r.raise_for_status()
@@ -63,7 +71,11 @@ async def stations(client: httpx.AsyncClient) -> list[dict]:
             for s in raw
             if s.get("crsCode")
         ]
-        f.write_text(json.dumps(out), encoding="utf-8")
+        # Atomic write: a crash mid-write must never leave a truncated file,
+        # since that file short-circuits the download on every later boot.
+        tmp = f.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(out), encoding="utf-8")
+        tmp.replace(f)
         return out
     except Exception:
         return []
@@ -280,26 +292,36 @@ async def poll_loop(client: httpx.AsyncClient) -> None:
         return
     _poll_started = True
     while True:
-        if enabled():
-            if not _stations_by_crs:
-                for s in await stations(client):
-                    if s.get("lat") is not None:
-                        _stations_by_crs[s["crs"].upper()] = s
-            now = datetime.now(LONDON_TZ)
-            for i in range(0, len(HUBS), 4):
-                chunk = HUBS[i:i + 4]
-                results = await asyncio.gather(
-                    *(_details_board(client, h) for h in chunk), return_exceptions=True)
-                for hub, res in zip(chunk, results):
-                    if isinstance(res, dict):
-                        try:
-                            _ingest_board(res, hub, now)
-                        except Exception:
-                            pass
-                await asyncio.sleep(1.5)
-            cutoff = time.time() - 600
-            for sid in [k for k, v in _trains.items() if v["updated"] < cutoff]:
-                _trains.pop(sid, None)
+        # The whole cycle is guarded: this task is started once and never
+        # supervised or restarted (asyncio only logs a dead task at GC), so a
+        # single exception escaping here used to silently kill national rail
+        # tracking for the life of the process while every other feed looked
+        # healthy. A bad cycle now logs and retries on the normal beat.
+        try:
+            if enabled():
+                if not _stations_by_crs:
+                    for s in await stations(client):
+                        if s.get("lat") is not None:
+                            _stations_by_crs[s["crs"].upper()] = s
+                now = datetime.now(LONDON_TZ)
+                for i in range(0, len(HUBS), 4):
+                    chunk = HUBS[i:i + 4]
+                    results = await asyncio.gather(
+                        *(_details_board(client, h) for h in chunk), return_exceptions=True)
+                    for hub, res in zip(chunk, results):
+                        if isinstance(res, dict):
+                            try:
+                                _ingest_board(res, hub, now)
+                            except Exception:
+                                pass
+                    await asyncio.sleep(1.5)
+                cutoff = time.time() - 600
+                for sid in [k for k, v in _trains.items() if v["updated"] < cutoff]:
+                    _trains.pop(sid, None)
+        except asyncio.CancelledError:
+            raise                       # clean shutdown must still cancel us
+        except Exception as e:
+            print(f"darwin poll cycle failed ({type(e).__name__}: {e}) - retrying", flush=True)
         await asyncio.sleep(120)
 
 
