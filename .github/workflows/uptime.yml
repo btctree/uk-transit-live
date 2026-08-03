@@ -1,0 +1,86 @@
+# Uptime check: is the live site actually serving?
+#
+# Without this, an outage is discovered only when somebody happens to open the
+# app. With it, a down site becomes a GitHub issue - and GitHub emails the
+# owner the moment an issue is created (same channel that announced the A1
+# win, so it is known to reach a human).
+#
+# Design choices:
+# - Three probes 20s apart before declaring an outage: a single failed request
+#   is as likely to be a network blip as a down site.
+# - One open issue per outage, found by title marker, not one per failed run -
+#   a long outage must not turn into an email flood. Recovery closes it.
+# - The job itself always exits 0. The signal is the issue, not a failed run:
+#   failed-run emails would repeat every cycle for the length of an outage.
+# - Odd-minute schedule: GitHub's cron queue is most congested at :00/:15/:30.
+# - NOTE: GitHub disables scheduled workflows after 60 days without a push to
+#   the repo. If commits stop, re-enable it from the Actions tab.
+
+name: Uptime check
+
+on:
+  schedule:
+    - cron: '9,32,51 * * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+env:
+  URL: https://145.241.199.54.sslip.io/api/status
+  MARKER: "[uptime] Site is DOWN"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe (3 attempts, 20s apart)
+        id: probe
+        run: |
+          code=000
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$URL" || echo 000)
+            echo "attempt $i: HTTP $code"
+            [ "$code" = "200" ] && break
+            [ "$i" != "3" ] && sleep 20
+          done
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Open or close the outage issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.probe.outputs.code }}
+        run: |
+          open_num=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=50" \
+            --jq "[.[] | select(.title | startswith(\"$MARKER\"))][0].number // empty")
+          if [ "$CODE" != "200" ]; then
+            if [ -z "$open_num" ]; then
+              gh api "repos/${{ github.repository }}/issues" \
+                -f title="$MARKER (HTTP $CODE)" \
+                -f body="$(printf '%s\n' \
+                  "Three probes of $URL failed; last status: HTTP $CODE." \
+                  "" \
+                  "Checks, in order:" \
+                  "1. https://145.241.199.54.sslip.io/ in a browser" \
+                  "2. Oracle console - is instance uk-transit-live RUNNING?" \
+                  "3. ssh -i ~/.ssh/uktransit_vm ubuntu@145.241.199.54 then: systemctl status uk-transit caddy" \
+                  "" \
+                  "This issue closes automatically when the site responds 200 again.")"
+              echo "outage issue opened"
+            else
+              echo "outage issue #$open_num already open - not spamming"
+            fi
+          else
+            if [ -n "$open_num" ]; then
+              gh api -X POST "repos/${{ github.repository }}/issues/$open_num/comments" \
+                -f body="Recovered: $URL returned HTTP 200."
+              gh api -X PATCH "repos/${{ github.repository }}/issues/$open_num" -f state=closed
+              echo "outage issue #$open_num closed"
+            fi
+            echo "site healthy"
+          fi
