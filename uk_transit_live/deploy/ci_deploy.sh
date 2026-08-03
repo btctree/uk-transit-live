@@ -17,6 +17,10 @@ IP="${1:-}"
 [ -z "$IP" ] && { echo "usage: bash deploy/ci_deploy.sh <VM_PUBLIC_IP>"; exit 1; }
 : "${SSH_KEY_FILE:?SSH_KEY_FILE not set}"
 : "${ENV_FILE:?ENV_FILE not set}"
+# Default to the published Release asset so a rebuild restores the caches even
+# if the DATA_PAYLOAD_URL repo variable is lost. Without the bundle a fresh
+# server crawls Overpass for hours to rebuild the GB rail graph.
+DATA_PAYLOAD_URL="${DATA_PAYLOAD_URL:-https://github.com/btctree/uk-transit-live/releases/download/data-v1/uk-transit-caches.tar.gz}"
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"      # .../uk_transit_live
 SSH_OPTS=(-i "$SSH_KEY_FILE" -o StrictHostKeyChecking=accept-new
@@ -98,6 +102,23 @@ sudo netfilter-persistent save 2>/dev/null || true
 sudo cp deploy/uk-transit.service /etc/systemd/system/uk-transit.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now uk-transit
+
+# HTTPS front end. Without this a rebuilt VM serves plain HTTP only: no
+# padlock, no iOS geolocation, broken PWA. The Caddyfile ships with the repo
+# so the whole public face of the site is part of the automated rebuild.
+if ! command -v caddy >/dev/null 2>&1; then
+  sudo apt-get $APT_OPTS install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl > /dev/null
+  [ -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg ] || \
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+      | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+    | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+  sudo apt-get $APT_OPTS update -qq
+  sudo apt-get $APT_OPTS install -y -qq caddy > /dev/null
+fi
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+sudo systemctl enable caddy
+sudo systemctl reload caddy 2>/dev/null || sudo systemctl restart caddy
 sleep 8
 systemctl --no-pager --lines=0 status uk-transit | head -5
 REMOTE

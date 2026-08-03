@@ -1,0 +1,18 @@
+# UK Transit Live - HTTPS front end.
+#
+# Caddy obtains and renews the Let's Encrypt certificate automatically.
+# HTTPS is not cosmetic here: iOS Safari refuses geolocation and service
+# workers over plain HTTP, which kills the "near me" feature and PWA install.
+#
+# The hostname is <reserved-ip>.sslip.io: sslip.io resolves the name to the
+# embedded IP with no signup or DNS account. The IP is an OCI RESERVED public
+# IP (free), so it survives instance rebuilds - re-attach it to a replacement
+# VM and this exact config keeps working. Swap in a real domain later by
+# changing this one line.
+#
+# This file is deployed by ci_deploy.sh to /etc/caddy/Caddyfile. Edit it here,
+# not on the VM, or a rebuild silently reverts your change.
+145.241.199.54.sslip.io {
+    encode zstd gzip
+    reverse_proxy localhost:8620
+}
