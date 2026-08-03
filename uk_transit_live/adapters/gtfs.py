@@ -11,6 +11,7 @@ import csv
 import io
 import math
 import sqlite3
+import threading
 import time
 import zipfile
 from datetime import datetime, timedelta
@@ -41,7 +42,15 @@ REGIONS = {
 }
 
 _status: dict[str, str] = {}          # region -> idle|downloading|building|ready|error
-_conns: dict[str, sqlite3.Connection] = {}
+# Connections are per-thread, never shared. ghosts()/departures() run under
+# asyncio.to_thread, so several pool workers hit the same region at once;
+# a single shared connection interleaves cursor state between them and starts
+# yielding malformed rows - empty tuples, which surface as
+# "IndexError: tuple index out of range" on r[0] and a 500 to the browser.
+# check_same_thread=False only silences Python's guard; it does not make
+# concurrent use of one connection safe. Read-only connections are cheap, so
+# each thread simply opens its own.
+_conn_local = threading.local()
 _active_cache: dict[str, tuple[str, set]] = {}   # region -> (yyyymmdd, service_ids)
 _delay_cache: dict[str, tuple[float, int | None]] = {}  # trip -> (ts, delay_secs)
 
@@ -69,15 +78,31 @@ def status(region: str) -> str:
     return _status.get(region, "idle")
 
 
+def _col0(rows) -> list:
+    """First column of each row, skipping malformed ones.
+
+    Production served 153 "IndexError: tuple index out of range" on a plain
+    [r[0] for r in ...] - sqlite handed back empty tuples. The errors clustered
+    while regions were still building, i.e. while the builder was replacing
+    gtfs_<region>.sqlite underneath open connections, and stopped once the
+    builds finished. Whatever the precise cause, a malformed row should degrade
+    one result set, not turn the whole request into a 500.
+    """
+    return [r[0] for r in rows if r]
+
+
 def _conn(region: str) -> sqlite3.Connection | None:
-    if region in _conns:
-        return _conns[region]
+    cache = getattr(_conn_local, "conns", None)
+    if cache is None:
+        cache = _conn_local.conns = {}
+    if region in cache:
+        return cache[region]
     db = DATA_DIR / f"gtfs_{region}.sqlite"
     if not db.exists():
         return None
     c = sqlite3.connect(db, check_same_thread=False)
     c.execute("PRAGMA query_only=1")
-    _conns[region] = c
+    cache[region] = c
     _status[region] = "ready"
     return c
 
@@ -354,9 +379,9 @@ def ghosts(region: str, min_lon: float, min_lat: float, max_lon: float, max_lat:
     now_s = _now_secs(now)
     active = _active_services(region, con, now)
 
-    stop_ids = [r[0] for r in con.execute(
+    stop_ids = _col0(con.execute(
         "SELECT stop_id FROM stops WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?",
-        (min_lat, max_lat, min_lon, max_lon))]
+        (min_lat, max_lat, min_lon, max_lon)))
     if not stop_ids:
         _ghost_cache[ck] = (time.time(), [])
         return []
@@ -366,9 +391,9 @@ def ghosts(region: str, min_lon: float, min_lat: float, max_lon: float, max_lat:
     for chunk_start in range(0, len(stop_ids), 300):
         chunk = stop_ids[chunk_start:chunk_start + 300]
         q = ",".join("?" * len(chunk))
-        trip_ids = [r[0] for r in con.execute(
+        trip_ids = _col0(con.execute(
             f"SELECT DISTINCT trip_id FROM stop_times WHERE stop_id IN ({q}) "
-            "AND dep BETWEEN ? AND ?", (*chunk, now_s - 2400, now_s + 2400))]
+            "AND dep BETWEEN ? AND ?", (*chunk, now_s - 2400, now_s + 2400)))
         trip_ids = [tid for tid in trip_ids if tid not in exclude and tid not in seen_trips][:1500]
         if not trip_ids:
             continue
