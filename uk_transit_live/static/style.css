@@ -287,9 +287,13 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
    replaces, which is what keeps a city centre readable at street zoom. */
 .stoplabel-bus {
   display: flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; padding: 0; border-radius: 50%;
+  /* 16px is about the floor: the border eats 3px of it, leaving 13px of white
+     for a 10.5px letter. Smaller and the B starts closing up at 900 weight. */
+  width: 16px; height: 16px; padding: 0; border-radius: 50%;
+  /* 2px, not 1.5: fractional borders get rounded down hard (1.5 rendered as
+     0.8) and the red ring goes faint against a pale basemap. */
   background: #fff; color: #DC241F; border: 2px solid #DC241F;
-  font-size: 12px; font-weight: 900; line-height: 1; letter-spacing: 0;
+  font-size: 10.5px; font-weight: 900; line-height: 1; letter-spacing: 0;
 }
 .stoplabel-rail { background: #9a7400; color: #fff; border: 1.5px solid #7d5e00; }
 .stoplabel:hover { outline: 2px solid var(--accent); }
