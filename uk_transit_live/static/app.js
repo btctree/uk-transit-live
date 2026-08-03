@@ -1570,7 +1570,7 @@ async function refreshBusStops() {
     const label = indicator ? `${name} (${indicator})` : name;
     const m = L.marker([lat, lon], {
       icon: L.divIcon({ className: "stoplabel-wrap",
-        html: '<span class="stoplabel stoplabel-bus">Bus Stop</span>',
+        html: '<span class="stoplabel stoplabel-bus">B</span>',
         iconSize: null }),
     }).addTo(state.busStopLayer);
     m.bindTooltip(escapeHtml(label), { direction: "top" });
