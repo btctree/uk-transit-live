@@ -32,7 +32,12 @@ permissions:
   issues: write
 
 env:
-  URL: https://145.241.199.54.sslip.io/api/status
+  # Probe the URL people actually use. The Worker sits in front because
+  # mobile networks (O2/giffgaff) filter the sslip.io origin name, so a
+  # green sslip probe would not prove the site is reachable from a phone.
+  URL: https://go.ukt.workers.dev/api/status
+  # Origin direct, bypassing the Worker and Caddy: separates
+  # 'edge/DNS broken' from 'server actually down'.
   IP_URL: http://145.241.199.54:8620/api/status
   MARKER: "[uptime] Site is DOWN"
 
@@ -72,7 +77,7 @@ jobs:
             --jq "[.[] | select(.title | startswith(\"$MARKER\"))][0].number // empty")
           if [ "$CODE" != "200" ]; then
             if [ "$IPCODE" = "200" ]; then
-              kind="DNS problem: the sslip.io name is failing but the server itself is UP (raw IP answers 200). Try https://145.241.199.54.nip.io instead; nothing to fix on the VM."
+              kind="Edge problem: the server is UP (raw IP answers 200) but go.ukt.workers.dev is not serving. Check the Cloudflare Worker. Origin fallbacks https://145.241.199.54.sslip.io and https://145.241.199.54.nip.io should still work on unfiltered networks."
             else
               kind="Server unreachable on both the hostname and the raw IP."
             fi
@@ -85,7 +90,7 @@ jobs:
                   "$kind" \
                   "" \
                   "Checks, in order:" \
-                  "1. https://145.241.199.54.sslip.io/ (backup: https://145.241.199.54.nip.io/)" \
+                  "1. https://go.ukt.workers.dev/ (origin fallbacks: https://145.241.199.54.sslip.io/ , https://145.241.199.54.nip.io/)" \
                   "2. Oracle console - is instance uk-transit-live RUNNING?" \
                   "3. ssh -i ~/.ssh/uktransit_vm ubuntu@145.241.199.54 then: systemctl status uk-transit caddy" \
                   "" \

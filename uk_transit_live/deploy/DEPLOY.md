@@ -20,6 +20,46 @@ First boot downloads NaPTAN (~100 MB) and builds region timetables on demand;
 they persist on disk afterwards. Rail Data Marketplace / BODS keys are per
 account, not per machine - the same keys work from the VM.
 
+## Public URL: why a Cloudflare Worker sits in front
+
+**Use https://go.ukt.workers.dev** — that is the address to share and to install
+on a phone.
+
+The origin is an Oracle A1 VM at a *reserved* (permanent) public IP,
+145.241.199.54, with Caddy terminating HTTPS. It is directly reachable at
+`https://145.241.199.54.sslip.io` and `https://145.241.199.54.nip.io`
+(two independent free wildcard-DNS services, so a hiccup in one leaves a
+working URL). Those are the origin fallbacks, still valid.
+
+They are **not** the public URL, because they do not work on UK mobile data.
+O2/giffgaff's filter kills the TLS handshake to destinations its categorisation
+engine does not recognise, which includes raw IPs and free wildcard-DNS names —
+they share a reputation bucket with malware infrastructure. The symptom is
+"Safari cannot open the page because it could not establish a secure
+connection", **on mobile data only**, while wifi works and the server logs show
+the request never arrived at all. Diagnosed by proving a Cloudflare-hosted
+hostname loaded on the same phone, same network, same instant, while the raw IP
+did not.
+
+So `deploy/cf-worker.js` runs as a Cloudflare Worker (account subdomain `ukt`,
+worker `go`) and proxies to the origin. workers.dev is a categorised, clean
+hostname, so mobile networks pass it.
+
+Watch out for:
+
+- **The Worker's live copy is edited in the Cloudflare dashboard**, not from
+  this repo. `deploy/cf-worker.js` is the reference copy — change one, change
+  both, or they silently diverge.
+- **Free plan: 100,000 requests/day, account-wide.** This app polls constantly,
+  so a few concurrent viewers are fine and a crowd is not. If that ever binds,
+  buy a domain (~£4–10/yr), point it at 145.241.199.54, and drop the Worker
+  entirely — the origin already serves HTTPS.
+- **The account is separate on purpose** (`bho.1228+uktransit@gmail.com`) so the
+  request quota is not shared with another product's Workers.
+
+The IP is reserved, so it survives instance rebuilds — re-attach it to a
+replacement VM and every URL above keeps working unchanged.
+
 ## Unattended: hunt and deploy from GitHub Actions
 
 `uk-london-1` is chronically out of Always Free Arm capacity, so getting a VM
