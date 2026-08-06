@@ -23,15 +23,17 @@ on:
     - cron: '9,32,51 * * * *'
   workflow_dispatch:
 
+# No concurrency group, deliberately. GitHub allows one running + one pending
+# run per group and CANCELS anything beyond that - and a cancelled run counts
+# as failed, which emails the owner about nothing. Overlapping probes are
+# harmless (both succeed, both see the same issue state), so the group bought
+# no safety and cost false alarms.
 permissions:
   issues: write
 
-concurrency:
-  group: uptime
-  cancel-in-progress: false
-
 env:
   URL: https://145.241.199.54.sslip.io/api/status
+  IP_URL: http://145.241.199.54:8620/api/status
   MARKER: "[uptime] Site is DOWN"
 
 jobs:
@@ -50,23 +52,40 @@ jobs:
             [ "$i" != "3" ] && sleep 20
           done
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          # Distinguish "server down" from "DNS name broken": the raw-IP probe
+          # bypasses sslip.io entirely. If the name fails but the IP answers,
+          # the outage is the DNS provider, and the issue should say so.
+          ipcode=skipped
+          if [ "$code" != "200" ]; then
+            ipcode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$IP_URL" || echo 000)
+            echo "raw-ip probe: HTTP $ipcode"
+          fi
+          echo "ipcode=$ipcode" >> "$GITHUB_OUTPUT"
 
       - name: Open or close the outage issue
         env:
           GH_TOKEN: ${{ github.token }}
           CODE: ${{ steps.probe.outputs.code }}
+          IPCODE: ${{ steps.probe.outputs.ipcode }}
         run: |
           open_num=$(gh api "repos/${{ github.repository }}/issues?state=open&per_page=50" \
             --jq "[.[] | select(.title | startswith(\"$MARKER\"))][0].number // empty")
           if [ "$CODE" != "200" ]; then
+            if [ "$IPCODE" = "200" ]; then
+              kind="DNS problem: the sslip.io name is failing but the server itself is UP (raw IP answers 200). Try https://145.241.199.54.nip.io instead; nothing to fix on the VM."
+            else
+              kind="Server unreachable on both the hostname and the raw IP."
+            fi
             if [ -z "$open_num" ]; then
               gh api "repos/${{ github.repository }}/issues" \
-                -f title="$MARKER (HTTP $CODE)" \
+                -f title="$MARKER (HTTP $CODE, raw-ip $IPCODE)" \
                 -f body="$(printf '%s\n' \
-                  "Three probes of $URL failed; last status: HTTP $CODE." \
+                  "Three probes of $URL failed; last status HTTP $CODE. Raw-IP probe: HTTP $IPCODE." \
+                  "" \
+                  "$kind" \
                   "" \
                   "Checks, in order:" \
-                  "1. https://145.241.199.54.sslip.io/ in a browser" \
+                  "1. https://145.241.199.54.sslip.io/ (backup: https://145.241.199.54.nip.io/)" \
                   "2. Oracle console - is instance uk-transit-live RUNNING?" \
                   "3. ssh -i ~/.ssh/uktransit_vm ubuntu@145.241.199.54 then: systemctl status uk-transit caddy" \
                   "" \

@@ -12,7 +12,11 @@
 #
 # This file is deployed by ci_deploy.sh to /etc/caddy/Caddyfile. Edit it here,
 # not on the VM, or a rebuild silently reverts your change.
-145.241.199.54.sslip.io {
+# Two hostnames, two independent wildcard-DNS providers (sslip.io and
+# nip.io), one IP. Both are free volunteer-run services; if one has a DNS
+# hiccup - which presents to a visitor as "the site is down" while the server
+# is fine - the other URL keeps working. Caddy holds a certificate for each.
+145.241.199.54.sslip.io, 145.241.199.54.nip.io {
     encode zstd gzip
     reverse_proxy localhost:8620
 }
