@@ -18,6 +18,9 @@ NS = {"siri": "http://www.siri.org.uk/siri"}
 
 _cache: dict[str, tuple[float, object]] = {}
 NATIONAL_SAMPLE = 2500  # markers a browser can animate comfortably at UK zoom
+# How long to stop hammering a dead BODS before trying again.
+NATIONAL_FAIL_TTL = 120
+EMPTY_NATIONAL = {"total": 0, "shown": 0, "vehicles": []}
 
 # One lock per cache key, tfl.cached-style. Without it, every request that
 # arrives after a TTL expires launches its own download AND its own parse of
@@ -118,20 +121,51 @@ async def national(client: httpx.AsyncClient) -> dict:
     if hit and now - hit[0] < 20:
         return hit[1]
 
+    # Negative cache. BODS is a government service that goes down, and when it
+    # does this endpoint returns a GOV.UK error PAGE with HTTP 200 - roughly
+    # 10s per request. Without this, every /api/departures, /api/ghosts and
+    # /api/ghostcount call re-attempts the dead download, so a favourites tab
+    # with four stops took ~40s to render and then 500'd. Fail fast instead.
+    fail = _cache.get("national_fail")
+    if fail and now - fail[0] < NATIONAL_FAIL_TTL:
+        return (_cache.get("national") or (0, EMPTY_NATIONAL))[1]
+
     async with _lock("national"):
         hit = _cache.get("national")    # double-check: a peer may have filled it
         if hit and time.time() - hit[0] < 20:
             return hit[1]
-        r = await client.get(
-            "https://data.bus-data.dft.gov.uk/avl/download/gtfsrt",
-            headers={"User-Agent": "uk-transit-live/0.1"},
-            timeout=60,
-            follow_redirects=True,
-        )
-        r.raise_for_status()
-        # Unzip + protobuf parse + fleet-wide dict build is the heaviest CPU
-        # job in the app; it runs in a worker thread, off the event loop.
-        out, trip_positions_map = await asyncio.to_thread(_parse_national, r.content)
+        fail = _cache.get("national_fail")
+        if fail and time.time() - fail[0] < NATIONAL_FAIL_TTL:
+            return (_cache.get("national") or (0, EMPTY_NATIONAL))[1]
+        try:
+            r = await client.get(
+                "https://data.bus-data.dft.gov.uk/avl/download/gtfsrt",
+                headers={"User-Agent": "uk-transit-live/0.1"},
+                timeout=20,
+                follow_redirects=True,
+            )
+            r.raise_for_status()
+            body = r.content
+            # Validate before parsing: an outage page is HTTP 200 text/html,
+            # and feeding that to protobuf raises DecodeError deep inside a
+            # worker thread, which surfaced to the browser as a bare 500.
+            ctype = (r.headers.get("content-type") or "").lower()
+            looks_binary = body[:2] in (b"PK", b"\x1f\x8b") or not body[:1].isascii() \
+                or body[:1] in (b"\n", b"\x08", b"\x1a", b"\x12")
+            if "html" in ctype or body[:1] in (b"<", b"{") or not looks_binary:
+                raise ValueError(
+                    f"BODS returned {ctype or 'unknown type'}, not a GTFS-RT feed "
+                    "(the service is probably down)")
+            # Unzip + protobuf parse + fleet-wide dict build is the heaviest CPU
+            # job in the app; it runs in a worker thread, off the event loop.
+            out, trip_positions_map = await asyncio.to_thread(_parse_national, body)
+        except Exception as e:                      # noqa: BLE001 - degrade, never 500
+            _cache["national_fail"] = (time.time(), str(e))
+            print(f"bods national feed unavailable ({type(e).__name__}: {e}) - "
+                  f"serving without live bus positions for {NATIONAL_FAIL_TTL}s",
+                  flush=True)
+            return (_cache.get("national") or (0, EMPTY_NATIONAL))[1]
+        _cache.pop("national_fail", None)
         _cache["trip_positions"] = (time.time(), trip_positions_map)
         _cache["national"] = (time.time(), out)
         return out
@@ -178,7 +212,13 @@ async def trip_positions(client: httpx.AsyncClient) -> dict:
     """{trip_id: (lat, lon)} for the whole live fleet (refreshes with national())."""
     hit = _cache.get("trip_positions")
     if not hit or time.time() - hit[0] > 40:
-        await national(client)
+        # national() degrades to empty rather than raising, but belt and
+        # braces: /api/departures must still return timetable data when the
+        # live bus feed is down, not a 500.
+        try:
+            await national(client)
+        except Exception:                       # noqa: BLE001
+            pass
         hit = _cache.get("trip_positions")
     return hit[1] if hit else {}
 

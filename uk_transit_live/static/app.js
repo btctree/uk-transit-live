@@ -102,6 +102,11 @@ if ($("sideclose")) $("sideclose").onclick = () => setNav(false);
 // Tapping the map auto-closes the drawer. This MUST go through setNav:
 // removing .open directly leaves body.navopen set, which keeps the floating
 // map bar hidden - the menu button and search box vanish with no way back.
+// If you pan or zoom yourself, the pending background GPS fix must not
+// snatch the map back - a map that moves under your finger is worse than
+// one that opens in the wrong place.
+map.on("dragstart zoomstart", () => { state._userMoved = true; });
+
 map.on("click popupopen", () => {
   if (window.innerWidth <= 480) setNav(false);
 });
@@ -201,8 +206,26 @@ $("placego").onclick = searchPlace;
    a poor GPS fix looks uncertain rather than falsely precise. */
 let _userDot = null, _userRing = null, _watchId = null;
 
+// Remember where you were, so the next visit can open there instantly without
+// waiting on - or re-prompting for - GPS. iOS re-asks permission per session in
+// a normal Safari tab, which is what made it feel like it "keeps asking".
+const LAST_POS_KEY = "ukt.lastpos";
+function saveLastPos(lat, lon) {
+  try { localStorage.setItem(LAST_POS_KEY, JSON.stringify({ lat, lon, t: Date.now() })); }
+  catch {}
+}
+function loadLastPos() {
+  try {
+    const p = JSON.parse(localStorage.getItem(LAST_POS_KEY) || "null");
+    // A month-old fix is still a better first view than the whole of Britain.
+    if (p && Date.now() - p.t < 30 * 864e5) return p;
+  } catch {}
+  return null;
+}
+
 function drawUserPos(lat, lon, accuracy) {
   state.userPos = [lat, lon];
+  saveLastPos(lat, lon);
   if (!_userDot) {
     _userRing = L.circle([lat, lon], {
       radius: accuracy || 0, color: "#1a73e8", weight: 1,
@@ -1437,7 +1460,11 @@ async function renderFavs() {
       <div class="svc-times" data-svc-key="${escapeHtml(svc.stop)}|${escapeHtml(svc.line)}|${escapeHtml(svc.dest || "")}"><div class="empty">loading…</div></div>
     </div>`;
   }
-  el.innerHTML = svcHtml + linesHtml + (state.favs.stops.length ? '<div class="empty">Loading live times…</div>' : "");
+  // The starred-stop boards load asynchronously into their own container.
+  // They used to finish by overwriting el.innerHTML wholesale, which erased
+  // the services/lines sections rendered above and orphaned the svcTimes
+  // fills - starred services visibly vanished a second after appearing.
+  el.innerHTML = svcHtml + linesHtml + (state.favs.stops.length ? '<div id="favstopblocks"><div class="empty">Loading live times…</div></div>' : "");
   // fill service times asynchronously
   for (const svc of (state.favs.services || [])) {
     svcTimes(svc).then((html) => {
@@ -1454,7 +1481,8 @@ async function renderFavs() {
       <div class="favname"><span class="jumpfav" data-id="${escapeHtml(s.id)}">${escapeHtml(s.name)}</span>
       <span class="unstar" data-id="${escapeHtml(s.id)}" title="Remove">★</span></div>${rows}</div>`;
   }));
-  el.innerHTML = linesHtml + blocks.join("");
+  const holder = el.querySelector("#favstopblocks");
+  if (holder) holder.innerHTML = blocks.join("");
 }
 
 // Next two times for one favourite service (route+direction at a stop).
@@ -1961,9 +1989,28 @@ function renderSources() {
   setInterval(pump, 1000);
   map.on("moveend", () => { if (state.bodsOn) { _due.bus = Date.now(); refreshBuses(); } });
 
-  // Deliberately no auto-locate on launch. This used to silently geolocate,
-  // fly to you and open the nearest stop's board - so the app opened with a
-  // permission prompt and a popup nobody asked for, over a map you had not
-  // chosen. Locating is now entirely on demand: ➤ on the map bar, or 📍 in
-  // the sidebar.
+  // Open where you are - without the popup, and without a prompt every time.
+  //
+  // The old behaviour geolocated on launch AND opened the nearest stop's
+  // board; the board popping up unasked was the objectionable part, so it
+  // stays gone. What returns is only the map centring.
+  //
+  // Two-stage, which is what removes the "keeps asking" feeling:
+  //   1. If we already know roughly where you were, go there immediately.
+  //      Instant, offline-safe, and triggers NO permission prompt at all.
+  //   2. Then refresh the real fix quietly in the background. On a first ever
+  //      visit that is the only stage, so iOS asks exactly once; after that
+  //      the map is already correct before the answer arrives.
+  const last = loadLastPos();
+  if (last) map.setView([last.lat, last.lon], 14);
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
+        // Don't yank the map if you have already started panning somewhere.
+        if (!state._userMoved) map.setView(state.userPos, Math.max(map.getZoom(), 14));
+      },
+      () => {},                       // denied or unavailable: keep the last view
+      { timeout: 8000, maximumAge: 600000 });
+  }
 })();
