@@ -90,6 +90,20 @@ def _loc_names(field) -> str:
     return " & ".join(l.get("locationName", "") for l in field if isinstance(l, dict))
 
 
+def _loc_crs(field) -> str | None:
+    """First location's CRS from the same shapes _loc_names accepts. A split
+    service ("X & Y") yields its first portion's code - close enough for a
+    map jump, and honest for the common single-destination case."""
+    if isinstance(field, dict):
+        field = field.get("location", [])
+    if not isinstance(field, list):
+        return None
+    for l in field:
+        if isinstance(l, dict) and l.get("crs"):
+            return l["crs"]
+    return None
+
+
 async def board(client: httpx.AsyncClient, crs: str) -> dict:
     crs = crs.strip().upper()
     if not re.fullmatch(r"[A-Z]{3}", crs):
@@ -122,6 +136,7 @@ async def board(client: httpx.AsyncClient, crs: str) -> dict:
             "platform": s.get("platform"),
             "operator": s.get("operator"),
             "destination": _loc_names(s.get("destination")),
+            "destCrs": _loc_crs(s.get("destination")),
             "origin": _loc_names(s.get("origin")),
             "cancelled": bool(s.get("isCancelled")) or etd.lower() == "cancelled",
             "delayed": etd.lower() not in ("on time", "cancelled", "") and etd != s.get("std"),

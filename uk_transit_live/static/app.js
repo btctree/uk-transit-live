@@ -873,9 +873,19 @@ function jumpToStation(crs, name) {
   const st = (state.stations || []).find((x) => x.crs === crs);
   if (!st || st.lat == null) return;
   map.closePopup();
+  // Jumps can start from the sidebar's departure board too; on a phone that
+  // board is the open drawer, which would cover the very map we just moved.
+  if (window.innerWidth <= 480) setNav(false);
   map.setView([st.lat, st.lon], Math.max(map.getZoom(), 12));
   pulseAt(st.lat, st.lon);
 }
+
+// The station departure board lives in the sidebar (not a popup), so it needs
+// its own delegated listener for destination jumps.
+$("railboard").addEventListener("click", (ev) => {
+  const j = ev.target.closest(".jump");
+  if (j && j.dataset.crs) jumpToStation(j.dataset.crs, j.textContent);
+});
 
 // Fly to a stop mentioned in a journey popup, then open its live board.
 async function jumpToStop(stopId, fallbackName) {
@@ -1979,7 +1989,9 @@ async function renderRail() {
     const why = s.cancelReason || s.delayReason;
     return `<div class="arr ${cls}">
       <div class="due">${escapeHtml(s.std || "")}</div>
-      <div class="dest">${escapeHtml(s.destination)}
+      <div class="dest">${s.destCrs
+          ? `<span class="jump" data-crs="${escapeHtml(s.destCrs)}">${escapeHtml(s.destination)}</span>`
+          : escapeHtml(s.destination)}
         <div class="sub">${escapeHtml(s.etd || "")}${s.operator ? " · " + escapeHtml(s.operator) : ""}${why ? "<br>" + escapeHtml(why) : ""}</div>
       </div>
       ${s.platform ? `<div class="plat">Plat ${escapeHtml(String(s.platform))}</div>` : ""}
