@@ -857,11 +857,24 @@ function applyTargets(family, targets) {
 /* Rich click-through detail per vehicle: onward stops + expected times where
  * the data exists (TfL vehicles + London buses + national trains); honest
  * fallback where it doesn't (non-London buses: England publishes GPS only). */
-function popRow(name, right, terminal, stopId) {
+function popRow(name, right, terminal, stopId, crs) {
   const nameHtml = stopId
     ? `<span class="jump" data-stop="${escapeHtml(stopId)}">${escapeHtml(name)}</span>`
-    : `<span>${escapeHtml(name)}</span>`;
+    : crs
+      ? `<span class="jump" data-crs="${escapeHtml(crs)}">${escapeHtml(name)}</span>`
+      : `<span>${escapeHtml(name)}</span>`;
   return `<div class="poprow${terminal ? " term" : ""}">${nameHtml}<span>${escapeHtml(right)}</span></div>`;
+}
+
+// Fly to a rail station named in a train's calling-point list. Unlike
+// jumpToStop (which opens a bus-stop board), this just takes the map there
+// and blinks the spot - the Train plate is then one tap from its board.
+function jumpToStation(crs, name) {
+  const st = (state.stations || []).find((x) => x.crs === crs);
+  if (!st || st.lat == null) return;
+  map.closePopup();
+  map.setView([st.lat, st.lon], Math.max(map.getZoom(), 12));
+  pulseAt(st.lat, st.lon);
 }
 
 // Fly to a stop mentioned in a journey popup, then open its live board.
@@ -892,6 +905,7 @@ map.on("popupopen", (e) => {
   node.addEventListener("click", (ev) => {
     const j = ev.target.closest(".jump");
     if (j && j.dataset.stop) jumpToStop(j.dataset.stop, j.textContent);
+    else if (j && j.dataset.crs) jumpToStation(j.dataset.crs, j.textContent);
   });
 });
 
@@ -971,7 +985,7 @@ async function vehicleDetailHtml(family, v) {
       drawJourney(d.route, d.callingPoints);
       head = `<b>${escapeHtml(d.operator || "Train")}</b> → ${escapeHtml(d.dest || "?")}`;
       rows = d.stops.map((s, i) =>
-        popRow(s.name, s.mins <= 0 ? "now" : `${s.mins} min`, i === d.stops.length - 1)).join("");
+        popRow(s.name, s.mins <= 0 ? "now" : `${s.mins} min`, i === d.stops.length - 1, null, s.crs)).join("");
     } else if (family === "tfl" && v.vehId) {
       highlightRoute(v.line);
       const arr = await api(`/api/vehicle/${v.vehId}?line=${encodeURIComponent(v.line || "")}`);
@@ -1701,11 +1715,34 @@ function busTarget(id, lat, lon, label, dest, operator, bearing, route, journey)
   const from = existing ? posToObj(positionOf(existing, clock())) : { lat, lon };
   const brg = bearing != null ? Number(bearing) : null;
   const isCoach = operator && COACH_OPS.has(operator);
+
+  // Dead reckoning. Animating toward the REPORTED point means the marker
+  // arrives where the bus WAS one poll ago, on top of the feed's own 10-60s
+  // staleness - which is why a bus you are watching on the street is visibly
+  // ahead of its dot. Instead, aim one poll interval ahead along the line the
+  // bus actually moved between its last two reports. Guards: only when a
+  // previous RAW report exists (projections must never compound off other
+  // projections), only at sane speeds (1-25 m/s), lead capped at 200m so a
+  // bus that stops or turns is wrong only briefly and by a bounded amount.
+  let target = { lat, lon };
+  const prev = existing && existing.rawB;
+  if (prev) {
+    const cosLat = Math.cos(lat * Math.PI / 180);
+    const dKm = Math.hypot((lat - prev.lat) * 111, (lon - prev.lon) * 111 * cosLat);
+    const speedMs = dKm * 1000 / BUS_POLL_S;
+    if (speedMs >= 1 && speedMs <= 25) {
+      const scale = Math.min(dKm, 0.2) / dKm;   // lead = min(last hop, 200m)
+      target = { lat: lat + (lat - prev.lat) * scale,
+                 lon: lon + (lon - prev.lon) * scale };
+    }
+  }
+
   return {
     key: id,
     vehId: id,
     a: from,
-    b: { lat, lon },
+    b: target,
+    rawB: { lat, lon },
     segDur: BUS_POLL_S,
     tAtPoll: BUS_POLL_S,
     colour: isCoach ? COACH_GREY : busColour(lat, lon),
