@@ -127,9 +127,13 @@ h1 { font-size: 19px; font-weight: 600; letter-spacing: .3px; }
 }
 
 footer {
-  padding: 8px 16px; font-size: 10.5px; color: var(--muted);
-  border-top: 1px solid var(--line);
+  padding: 8px 16px; font-size: 9.5px; color: var(--muted);
+  border-top: 1px solid var(--line); line-height: 1.5;
 }
+/* Attribution links must be readable on the dark panel - default browser
+   link blue is near-invisible here. */
+footer a { color: var(--muted); text-decoration: underline; }
+footer a:hover { color: var(--accent); }
 
 #map { flex: 1; height: 100vh; background: #dfe7ec; }
 
@@ -242,6 +246,15 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
 .empty { font-size: 12px; color: var(--muted); padding: 10px 4px; }
 
 /* Rail board inside sidebar */
+/* Destination names are tap targets (fly the map to that station), but the
+   only .jump styling lived inside .pop - light-background map popups. Here on
+   the dark sidebar they rendered as plain white text, indistinguishable from
+   labels, so nobody could tell they were tappable. */
+#railboard .jump {
+  color: var(--accent); cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 3px;
+}
+#railboard .jump:active, #railboard .jump:hover { color: #4fc3f7; }
 #railboard .arr .due { min-width: 46px; }
 #railboard h3 { font-size: 13px; margin: 6px 0 4px; }
 #railboard .gen { font-size: 10.5px; color: var(--muted); margin-bottom: 6px; }
