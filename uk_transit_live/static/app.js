@@ -1874,6 +1874,10 @@ function refreshRailStations() {
       document.querySelector('.tab[data-tab="rail"]').click();
       $("railsearch").value = `${s.name} (${s.crs})`;
       goRail();
+      // The departures board renders in the SIDEBAR. On a phone the sidebar
+      // is a closed drawer, so without this the tap did everything invisibly
+      // and the station looked dead - open the drawer so the board is seen.
+      if (window.innerWidth <= 480) setNav(true);
     });
     if (++n >= 300) break;
   }
@@ -2003,7 +2007,20 @@ function renderSources() {
   //      the map is already correct before the answer arrives.
   const last = loadLastPos();
   if (last) map.setView([last.lat, last.lon], 14);
-  if (navigator.geolocation) {
+  // Only fetch a fresh fix when the OS says permission is ALREADY granted -
+  // then it is silent. iOS often forgets web geolocation grants between
+  // sessions, so an unconditional getCurrentPosition here meant a permission
+  // popup on every single open. Now: no silent grant -> no prompt; locating
+  // is on demand via the map bar button, and the remembered position above
+  // still opens the map in the right place either way.
+  let silentOk = false;
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const st = await navigator.permissions.query({ name: "geolocation" });
+      silentOk = st.state === "granted";
+    }
+  } catch {}
+  if (silentOk && navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       (p) => {
         drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
