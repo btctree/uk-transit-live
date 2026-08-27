@@ -244,29 +244,55 @@ function drawUserPos(lat, lon, accuracy) {
 
 const LOCATE_ZOOM = 16;
 
-function locateMe(el) {
+/* The locate button is a toggle, like the recenter button in Google Maps:
+   tap -> jump to where you are (zoom 16) and keep the map locked on you as
+   you move; tap again -> release. Dragging the map away, or jumping to a
+   station, also releases it - snapping back on the next GPS fix would fight
+   the user's own hands. The lit button shows the lock is on. */
+let _locateLocked = false;
+let _followPan = false;   // marks map moves WE make, so they don't self-unlock
+
+function setLocateLit(on) {
+  ["maploc", "locbtn"].forEach((id) => {
+    const b = $(id); if (b) b.classList.toggle("on", on);
+  });
+}
+
+function stopLocate() {
+  _locateLocked = false;
+  setLocateLit(false);
+  if (_watchId !== null) { navigator.geolocation.clearWatch(_watchId); _watchId = null; }
+  // The blue dot stays put as "last known position" - only the following stops.
+}
+
+function locateMe() {
+  if (_locateLocked) { stopLocate(); return; }
   if (!navigator.geolocation) {
     showLocError("This browser has no location support.");
     return;
   }
-  if (el) el.classList.add("on");
+  _locateLocked = true;
+  setLocateLit(true);
   navigator.geolocation.getCurrentPosition(
     (p) => {
+      if (!_locateLocked) return;      // toggled off while waiting for the fix
       drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
-      // Exact zoom, not Math.max: max() could only ever zoom IN, so when the
-      // restored view was already deeper than the target, tapping locate
-      // changed nothing - which made zoom tuning look broken on the phone.
-      // (Tile scale: ~12 town, 14 district, 15 neighbourhood, 16 streets,
-      // 17+ buildings.)
-      map.setView(state.userPos, LOCATE_ZOOM);
+      _followPan = true;
+      try { map.setView(state.userPos, LOCATE_ZOOM); } finally { _followPan = false; }
       if (_watchId === null) {
         _watchId = navigator.geolocation.watchPosition(
-          (q) => drawUserPos(q.coords.latitude, q.coords.longitude, q.coords.accuracy),
+          (q) => {
+            drawUserPos(q.coords.latitude, q.coords.longitude, q.coords.accuracy);
+            if (_locateLocked) {       // follow at whatever zoom you chose
+              _followPan = true;
+              try { map.panTo(state.userPos); } finally { _followPan = false; }
+            }
+          },
           () => {}, { enableHighAccuracy: true, maximumAge: 10000 });
       }
     },
     (err) => {
-      if (el) el.classList.remove("on");
+      stopLocate();
       showLocError(err && err.code === 1
         ? "Location permission denied — enable it in Settings ▸ Safari ▸ Location."
         : "Couldn't get your location.");
@@ -274,13 +300,17 @@ function locateMe(el) {
     { timeout: 10000, enableHighAccuracy: true });
 }
 
+// Any map movement that isn't our own follow-pan means the user wants to look
+// elsewhere (drag, a station jump, search) - release the lock.
+map.on("movestart", () => { if (_locateLocked && !_followPan) stopLocate(); });
+
 function showLocError(msg) {
   const html = `<div class="empty">${msg}</div>`;
   const m = $("mapresults"); if (m) { m.innerHTML = html; setTimeout(() => { m.innerHTML = ""; }, 5000); }
   const p = $("placeresults"); if (p) p.innerHTML = html;
 }
 
-$("locbtn").onclick = () => locateMe($("locbtn"));
+$("locbtn").onclick = () => locateMe();
 
 // Shared by the sidebar search and the floating map bar, so both behave
 // identically instead of drifting apart.
@@ -313,7 +343,7 @@ if ($("mapsearch")) {
   $("mapsearch").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { searchPlace("mapsearch", "mapresults"); $("mapsearch").blur(); }
   });
-  $("maploc").onclick = () => locateMe($("maploc"));
+  $("maploc").onclick = () => locateMe();
   // Tapping the map should clear a stale result list rather than leaving it
   // floating over the thing you just tried to look at.
   map.on("click", () => { const m = $("mapresults"); if (m) m.innerHTML = ""; });
@@ -2094,7 +2124,7 @@ function renderSources() {
   //      visit that is the only stage, so iOS asks exactly once; after that
   //      the map is already correct before the answer arrives.
   const last = loadLastPos();
-  if (last) map.setView([last.lat, last.lon], 14);
+  if (last) map.setView([last.lat, last.lon], LOCATE_ZOOM);
   // Only fetch a fresh fix when the OS says permission is ALREADY granted -
   // then it is silent. iOS often forgets web geolocation grants between
   // sessions, so an unconditional getCurrentPosition here meant a permission
@@ -2113,7 +2143,7 @@ function renderSources() {
       (p) => {
         drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
         // Don't yank the map if you have already started panning somewhere.
-        if (!state._userMoved) map.setView(state.userPos, Math.max(map.getZoom(), 14));
+        if (!state._userMoved) map.setView(state.userPos, LOCATE_ZOOM);
       },
       () => {},                       // denied or unavailable: keep the last view
       { timeout: 8000, maximumAge: 600000 });

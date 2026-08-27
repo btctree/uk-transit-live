@@ -504,3 +504,6 @@ body.zl-s .vsvg.vsvg-train { width: calc(min(var(--cars, 4), 3) * 5px); }
 
 .oprow.opsel { background: var(--panel2); outline: 1px solid var(--accent); }
 .citycount { font-size: 11px; color: var(--muted); }
+
+/* Locate is a toggle now - a lit button means following you. */
+#locbtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
