@@ -73,6 +73,11 @@
       <datalist id="stationlist"></datalist>
       <button id="railgo">Go</button>
     </div>
+    <!-- Outside #railboard on purpose: the board re-renders every 30s, and an
+         input inside it would be wiped mid-typing. -->
+    <div class="searchrow" id="railfilterrow" style="display:none">
+      <input id="railfilter" placeholder="Only trains calling at… (e.g. Stockport)" autocomplete="off">
+    </div>
     <div id="railboard"></div>
   </section>
 

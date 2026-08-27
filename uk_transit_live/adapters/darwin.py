@@ -90,6 +90,30 @@ def _loc_names(field) -> str:
     return " & ".join(l.get("locationName", "") for l in field if isinstance(l, dict))
 
 
+def _calls(field) -> list[dict]:
+    """Flatten subsequentCallingPoints into [{name, crs, time}].
+
+    Shapes seen in the wild: {"callingPointList":[{"callingPoint":[{...}]}]}
+    or a bare list of lists. A split train has one list per portion - all are
+    included, so a filter finds the station whichever portion serves it."""
+    if isinstance(field, dict):
+        field = field.get("callingPointList", [])
+    if not isinstance(field, list):
+        return []
+    out = []
+    for lst in field:
+        pts = lst.get("callingPoint", []) if isinstance(lst, dict) else lst
+        if not isinstance(pts, list):
+            continue
+        for p in pts:
+            if not isinstance(p, dict):
+                continue
+            et = (p.get("et") or "").strip()
+            time = et if et and et.lower() not in ("on time", "cancelled") else (p.get("st") or "")
+            out.append({"name": p.get("locationName"), "crs": p.get("crs"), "time": time})
+    return out[:40]
+
+
 def _loc_crs(field) -> str | None:
     """First location's CRS from the same shapes _loc_names accepts. A split
     service ("X & Y") yields its first portion's code - close enough for a
@@ -137,6 +161,7 @@ async def board(client: httpx.AsyncClient, crs: str) -> dict:
             "operator": s.get("operator"),
             "destination": _loc_names(s.get("destination")),
             "destCrs": _loc_crs(s.get("destination")),
+            "calls": _calls(s.get("subsequentCallingPoints")),
             "origin": _loc_names(s.get("origin")),
             "cancelled": bool(s.get("isCancelled")) or etd.lower() == "cancelled",
             "delayed": etd.lower() not in ("on time", "cancelled", "") and etd != s.get("std"),

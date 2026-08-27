@@ -251,7 +251,11 @@ function locateMe(el) {
   navigator.geolocation.getCurrentPosition(
     (p) => {
       drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
-      map.setView(state.userPos, Math.max(map.getZoom(), 15));
+      // Street level. 15 showed a district; 17 shows the streets around you,
+      // which is what "where am I" is actually asking. (Tile scale here runs
+      // ~14 district, 15 neighbourhood, 16 streets, 17 street + buildings,
+      // 18-19 single-building detail.)
+      map.setView(state.userPos, Math.max(map.getZoom(), 17));
       if (_watchId === null) {
         _watchId = navigator.geolocation.watchPosition(
           (q) => drawUserPos(q.coords.latitude, q.coords.longitude, q.coords.accuracy),
@@ -1984,15 +1988,44 @@ async function renderRail() {
   let b;
   try { b = await api(`/api/rail/board/${state.railCrs}`); }
   catch (e) { el.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`; return; }
+  state.railBoard = b;              // kept so the filter re-renders without refetching
+  $("railfilterrow").style.display = "";
+  renderRailRows();
+}
+
+// Which trains from this board call at the station the user typed?
+// Matches the destination OR any calling point, by name substring or exact
+// CRS code; a matched calling point also shows its arrival time on the row.
+function railServiceMatch(s, q) {
+  if (!q) return { ok: true };
+  const Q = q.toUpperCase();
+  if ((s.destination || "").toLowerCase().includes(q) || s.destCrs === Q) return { ok: true };
+  const hit = (s.calls || []).find(
+    (c) => (c.name || "").toLowerCase().includes(q) || c.crs === Q);
+  return hit ? { ok: true, call: hit } : { ok: false };
+}
+
+function renderRailRows() {
+  const b = state.railBoard;
+  if (!b) return;
+  const el = $("railboard");
+  const q = ($("railfilter").value || "").trim().toLowerCase();
+  let shown = 0;
   const rows = b.services.map((s) => {
+    const m = railServiceMatch(s, q);
+    if (!m.ok) return "";
+    shown++;
     const cls = s.cancelled ? "cancelled" : s.delayed ? "delayed" : "";
     const why = s.cancelReason || s.delayReason;
+    const callNote = m.call
+      ? ` · <b>calls ${escapeHtml(m.call.name)}${m.call.time ? " " + escapeHtml(m.call.time) : ""}</b>`
+      : "";
     return `<div class="arr ${cls}">
       <div class="due">${escapeHtml(s.std || "")}</div>
       <div class="dest">${s.destCrs
           ? `<span class="jump" data-crs="${escapeHtml(s.destCrs)}">${escapeHtml(s.destination)}</span>`
           : escapeHtml(s.destination)}
-        <div class="sub">${escapeHtml(s.etd || "")}${s.operator ? " · " + escapeHtml(s.operator) : ""}${why ? "<br>" + escapeHtml(why) : ""}</div>
+        <div class="sub">${escapeHtml(s.etd || "")}${s.operator ? " · " + escapeHtml(s.operator) : ""}${callNote}${why ? "<br>" + escapeHtml(why) : ""}</div>
       </div>
       ${s.platform ? `<div class="plat">Plat ${escapeHtml(String(s.platform))}</div>` : ""}
     </div>`;
@@ -2001,8 +2034,11 @@ async function renderRail() {
     <h3>${escapeHtml(b.station)}</h3>
     <div class="gen">Live departures · refreshes every 30s</div>
     ${b.messages.map((m) => `<div class="boardmsg">${escapeHtml(m)}</div>`).join("")}
-    ${rows || '<div class="empty">No services shown.</div>'}`;
+    ${rows || (q
+      ? `<div class="empty">None of the next ${b.services.length} departures call at “${escapeHtml($("railfilter").value.trim())}”.</div>`
+      : '<div class="empty">No services shown.</div>')}`;
 }
+$("railfilter").addEventListener("input", renderRailRows);
 
 /* ---------- tabs & sources ---------- */
 for (const t of document.querySelectorAll(".tab")) {
