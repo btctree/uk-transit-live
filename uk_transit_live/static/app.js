@@ -251,11 +251,11 @@ function locateMe(el) {
   navigator.geolocation.getCurrentPosition(
     (p) => {
       drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
-      // Street level. 15 showed a district; 16 shows readable streets around
-      // you without losing the area, which is what "where am I" is asking.
-      // (Tile scale here runs ~14 district, 15 neighbourhood, 16 streets,
-      // 17 street + buildings, 18-19 single-building detail.)
-      map.setView(state.userPos, Math.max(map.getZoom(), 16));
+      // Locate zoom: tried 17 and 16, the user preferred 15 - neighbourhood
+      // view with a bit of context beats close-up streets here. (Tile scale
+      // runs ~14 district, 15 neighbourhood, 16 streets, 17 street +
+      // buildings, 18-19 single-building detail.)
+      map.setView(state.userPos, Math.max(map.getZoom(), 15));
       if (_watchId === null) {
         _watchId = navigator.geolocation.watchPosition(
           (q) => drawUserPos(q.coords.latitude, q.coords.longitude, q.coords.accuracy),
