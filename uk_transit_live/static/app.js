@@ -242,6 +242,8 @@ function drawUserPos(lat, lon, accuracy) {
   }
 }
 
+const LOCATE_ZOOM = 16;
+
 function locateMe(el) {
   if (!navigator.geolocation) {
     showLocError("This browser has no location support.");
@@ -251,10 +253,12 @@ function locateMe(el) {
   navigator.geolocation.getCurrentPosition(
     (p) => {
       drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
-      // Locate zoom: the user tried 17/16/15/14 and settled on 12 - the
-      // whole-town view. (Tile scale runs ~12 town, 14 district, 15
-      // neighbourhood, 16 streets, 17+ buildings.)
-      map.setView(state.userPos, Math.max(map.getZoom(), 12));
+      // Exact zoom, not Math.max: max() could only ever zoom IN, so when the
+      // restored view was already deeper than the target, tapping locate
+      // changed nothing - which made zoom tuning look broken on the phone.
+      // (Tile scale: ~12 town, 14 district, 15 neighbourhood, 16 streets,
+      // 17+ buildings.)
+      map.setView(state.userPos, LOCATE_ZOOM);
       if (_watchId === null) {
         _watchId = navigator.geolocation.watchPosition(
           (q) => drawUserPos(q.coords.latitude, q.coords.longitude, q.coords.accuracy),
