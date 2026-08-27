@@ -251,11 +251,10 @@ function locateMe(el) {
   navigator.geolocation.getCurrentPosition(
     (p) => {
       drawUserPos(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
-      // Locate zoom: tried 17, 16 and 15; the user settled on 14 - the wide
-      // district view, whole area at a glance. (Tile scale runs ~14 district,
-      // 15 neighbourhood, 16 streets, 17 street + buildings, 18-19
-      // single-building detail.)
-      map.setView(state.userPos, Math.max(map.getZoom(), 14));
+      // Locate zoom: the user tried 17/16/15/14 and settled on 12 - the
+      // whole-town view. (Tile scale runs ~12 town, 14 district, 15
+      // neighbourhood, 16 streets, 17+ buildings.)
+      map.setView(state.userPos, Math.max(map.getZoom(), 12));
       if (_watchId === null) {
         _watchId = navigator.geolocation.watchPosition(
           (q) => drawUserPos(q.coords.latitude, q.coords.longitude, q.coords.accuracy),
