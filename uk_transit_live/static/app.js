@@ -363,6 +363,12 @@ state.bodsLayer = L.layerGroup().addTo(map);
 /* ---------- helpers ---------- */
 async function api(path) {
   const r = await fetch(path);
+  // Feed timestamps get compared against OUR clock; a phone minutes off
+  // (auto-time disabled, dead RTC) would silently blank the live-bus layer
+  // or let parked fleets through. Every response carries the server's Date
+  // header - track the offset and judge data ages by server time instead.
+  const svDate = Date.parse(r.headers.get("date") || "");
+  if (Number.isFinite(svDate)) state.svClockSkewMs = Date.now() - svDate;
   if (!r.ok) {
     let msg = `${r.status}`;
     try { msg = (await r.json()).detail || msg; } catch {}
@@ -1259,6 +1265,13 @@ function positionOf(v, now) {
     v._segIdx = i;
     return [la1 + (la2 - la1) * g, lo1 + (lo2 - lo1) * g];
   }
+  if (f >= 1 && v.vel) {
+    // BODS buses: a late poll (slow network, backgrounded tab) used to
+    // freeze the marker at its target. Keep creeping at the estimated
+    // speed for up to 30s more, until fresh data lands.
+    const over = Math.min(elapsed - v.tAtPoll, 30, v.creepMaxS || 0);
+    if (over > 0) return [v.b.lat + v.vel.lat * over, v.b.lon + v.vel.lon * over];
+  }
   return [v.a.lat + (v.b.lat - v.a.lat) * f, v.a.lon + (v.b.lon - v.a.lon) * f];
 }
 
@@ -1757,31 +1770,57 @@ function busColour(lat, lon) {
   return DEFAULT_BUS;
 }
 
-function busTarget(id, lat, lon, label, dest, operator, bearing, route, journey) {
+function busTarget(id, lat, lon, label, dest, operator, bearing, route, journey, fixAt) {
   const existing = state.vehicles.get(`bods|${id}`);
   const from = existing ? posToObj(positionOf(existing, clock())) : { lat, lon };
   const brg = bearing != null ? Number(bearing) : null;
   const isCoach = operator && COACH_OPS.has(operator);
 
-  // Dead reckoning. Animating toward the REPORTED point means the marker
-  // arrives where the bus WAS one poll ago, on top of the feed's own 10-60s
-  // staleness - which is why a bus you are watching on the street is visibly
-  // ahead of its dot. Instead, aim one poll interval ahead along the line the
-  // bus actually moved between its last two reports. Guards: only when a
-  // previous RAW report exists (projections must never compound off other
-  // projections), only at sane speeds (1-25 m/s), lead capped at 200m so a
-  // bus that stops or turns is wrong only briefly and by a bounded amount.
-  let target = { lat, lon };
+  // Dead reckoning, age-aware. The reported point is where the bus WAS -
+  // by the time a fix reaches the screen it is typically 20-60s old
+  // (operator reporting lag + feed batching + our server caches + the poll
+  // interval), which is why a bus you watch on the street runs ahead of its
+  // dot. Every fix carries its own timestamp, so: estimate velocity from
+  // the last two RAW fixes over the REAL interval between them, then aim
+  // speed * (fix age + one poll) ahead - the marker lands where the bus
+  // should BE and keeps pace with it. Guards: velocity only from raw fixes
+  // (projections never compound off projections), sane speeds (1-25 m/s),
+  // fix gaps of 3-90s only, and total lead capped at 450m so a bus that
+  // stops or turns is wrong only briefly and by a bounded amount. A
+  // re-served identical fix (dt=0, upstream cache) keeps the previous
+  // velocity so the bus glides on instead of freezing - but only while the
+  // fix is under 90s old: a fix that stops advancing means the bus stopped
+  // reporting (terminus, unit off), and projecting it forever would park
+  // its dot 450m up the road for the whole 15-min stale window.
   const prev = existing && existing.rawB;
+  if (prev && prev.t && fixAt && fixAt < prev.t) {
+    // Out-of-order fix (a bbox-cache boundary re-served an older snapshot):
+    // never roll backwards - stick with the newer fix we already hold.
+    lat = prev.lat; lon = prev.lon; fixAt = prev.t;
+  }
+  let vel = (existing && existing.vel) || null;
   if (prev) {
-    const cosLat = Math.cos(lat * Math.PI / 180);
-    const dKm = Math.hypot((lat - prev.lat) * 111, (lon - prev.lon) * 111 * cosLat);
-    const speedMs = dKm * 1000 / BUS_POLL_S;
-    if (speedMs >= 1 && speedMs <= 25) {
-      const scale = Math.min(dKm, 0.2) / dKm;   // lead = min(last hop, 200m)
-      target = { lat: lat + (lat - prev.lat) * scale,
-                 lon: lon + (lon - prev.lon) * scale };
+    const dt = fixAt && prev.t ? (fixAt - prev.t) / 1000 : BUS_POLL_S;
+    if (dt >= 3) {
+      const cosLat = Math.cos(lat * Math.PI / 180);
+      const dKm = Math.hypot((lat - prev.lat) * 111, (lon - prev.lon) * 111 * cosLat);
+      const speedMs = dKm * 1000 / dt;
+      vel = (dt <= 90 && speedMs >= 1 && speedMs <= 25)
+        ? { lat: (lat - prev.lat) / dt, lon: (lon - prev.lon) / dt, kmS: dKm / dt }
+        : null;
     }
+  }
+  if (vel && fixAt && (serverNow() - fixAt) / 1000 > 90) vel = null;
+  let target = { lat, lon };
+  let creepMaxS = 0;
+  if (vel) {
+    const ageS = fixAt ? clamp((serverNow() - fixAt) / 1000, 0, 60) : 0;
+    const aheadS = ageS + BUS_POLL_S;
+    const k = Math.min(1, 0.45 / (vel.kmS * aheadS));   // cap lead at 450m
+    target = { lat: lat + vel.lat * aheadS * k,
+               lon: lon + vel.lon * aheadS * k };
+    // Late-poll creep must share the SAME 450m budget, not add to it.
+    creepMaxS = (0.45 - vel.kmS * aheadS * k) / vel.kmS;
   }
 
   return {
@@ -1789,7 +1828,9 @@ function busTarget(id, lat, lon, label, dest, operator, bearing, route, journey)
     vehId: id,
     a: from,
     b: target,
-    rawB: { lat, lon },
+    rawB: { lat, lon, t: fixAt || null },
+    vel,
+    creepMaxS,
     segDur: BUS_POLL_S,
     tAtPoll: BUS_POLL_S,
     colour: isCoach ? COACH_GREY : busColour(lat, lon),
@@ -1805,6 +1846,12 @@ function busTarget(id, lat, lon, label, dest, operator, bearing, route, journey)
   };
 }
 const posToObj = (ll) => ({ lat: ll[0], lon: ll[1] });
+// SIRI RecordedAtTime is ISO-8601 -> epoch ms, or null when absent/unparsable.
+const parseFixTime = (iso) => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? t : null; };
+const STALE_FIX_S = 900;   // 15 min; no timestamp -> benefit of the doubt
+// Server-corrected wall clock (offset learned from API Date headers in api()).
+const serverNow = () => Date.now() - (state.svClockSkewMs || 0);
+const freshBus = (t) => t == null || (serverNow() - t) / 1000 < STALE_FIX_S;
 
 function renderCityChips(d) {
   cityChipLayer.clearLayers();
@@ -1861,10 +1908,16 @@ async function refreshBuses() {
     // Country view: no individual vehicles — live city chips instead.
     let d;
     try { d = await api("/api/buses/national"); } catch { return; }
-    state.busTotal = d.total;
+    // Chips and counters must use the same definition of "live" as the
+    // detail view, or a chip advertises ~250 buses where zooming in shows
+    // ~15 (parked fleets dominate the raw feed on quiet mornings).
+    const fresh = d.vehicles.filter((v) => freshBus(v.ts ? v.ts * 1000 : null));
+    const freshTotal = d.vehicles.length
+      ? Math.round(d.total * fresh.length / d.vehicles.length) : d.total;
+    state.busTotal = freshTotal;
     state.busShown = 0;
     applyTargets("bods", []);
-    renderCityChips(d);
+    renderCityChips({ ...d, total: freshTotal, shown: fresh.length, vehicles: fresh });
     return;
   }
 
@@ -1872,7 +1925,11 @@ async function refreshBuses() {
   try {
     if (state.config.bods) {
       const b = map.getBounds();
-      const vs = await api(`/api/buses?minLon=${b.getWest()}&minLat=${b.getSouth()}&maxLon=${b.getEast()}&maxLat=${b.getNorth()}`);
+      const raw = await api(`/api/buses?minLon=${b.getWest()}&minLat=${b.getSouth()}&maxLon=${b.getEast()}&maxLat=${b.getNorth()}`);
+      // Parked fleets keep re-reporting a frozen fix for HOURS (measured: on a
+      // quiet morning ~250 of 265 "live" buses in central Manchester carried
+      // fixes 1-24h old). A dot that hasn't reported for 15 min isn't live.
+      const vs = raw.filter((v) => freshBus(parseFixTime(v.recorded)));
       state.busTotal = vs.length;
       const cap = busCapForZoom(z);
       let picked = vs;
@@ -1882,15 +1939,18 @@ async function refreshBuses() {
       }
       state.busShown = picked.length;
       targets = picked.map((v) => busTarget(v.id, v.lat, v.lon, `Bus ${v.line || ""}`.trim(), v.destination, v.operator, v.bearing, v.line,
-        { originName: v.originName, originRef: v.originRef, originDep: v.originDep, destRef: v.destRef, destArrival: v.destArrival }));
+        { originName: v.originName, originRef: v.originRef, originDep: v.originDep, destRef: v.destRef, destArrival: v.destArrival },
+        parseFixTime(v.recorded)));
     } else {
       // Keyless fallback: national feed clipped to the viewport.
       const d = await api("/api/buses/national");
       const b = map.getBounds();
-      const vs = d.vehicles.filter((v) => b.contains([v.lat, v.lon]));
-      state.busTotal = d.total;
+      const freshAll = d.vehicles.filter((v) => freshBus(v.ts ? v.ts * 1000 : null));
+      const vs = freshAll.filter((v) => b.contains([v.lat, v.lon]));
+      state.busTotal = d.vehicles.length
+        ? Math.round(d.total * freshAll.length / d.vehicles.length) : d.total;
       state.busShown = vs.length;
-      targets = vs.map((v) => busTarget(v.id, v.lat, v.lon, "Bus", null, null, v.bearing, null));
+      targets = vs.map((v) => busTarget(v.id, v.lat, v.lon, "Bus", null, null, v.bearing, null, null, v.ts ? v.ts * 1000 : null));
     }
   } catch { return; }
   applyTargets("bods", targets);

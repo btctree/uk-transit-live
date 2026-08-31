@@ -7,6 +7,7 @@ serves vehicle positions refreshed every ~10 seconds.
 import asyncio
 import os
 import time
+from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 import zlib
 
@@ -20,7 +21,7 @@ _cache: dict[str, tuple[float, object]] = {}
 NATIONAL_SAMPLE = 2500  # markers a browser can animate comfortably at UK zoom
 # How long to stop hammering a dead BODS before trying again.
 NATIONAL_FAIL_TTL = 120
-EMPTY_NATIONAL = {"total": 0, "shown": 0, "vehicles": []}
+EMPTY_NATIONAL = {"total": 0, "shown": 0, "fetched": None, "vehicles": []}
 
 # One lock per cache key, tfl.cached-style. Without it, every request that
 # arrives after a TTL expires launches its own download AND its own parse of
@@ -194,6 +195,10 @@ def _parse_national(data: bytes) -> tuple[dict, dict]:
             "lon": round(v.position.longitude, 5),
             "bearing": round(v.position.bearing) if v.position.bearing else None,
             "route": v.trip.route_id or None,
+            # GPS-fix time (unix secs). The client dead-reckons buses forward
+            # by the real age of each fix; without this the national layer
+            # has no age signal at all. Proto default 0 -> None.
+            "ts": v.timestamp or None,
         })
         if v.trip.trip_id:
             trip_positions_map[v.trip.trip_id] = (v.position.latitude, v.position.longitude)
@@ -205,7 +210,10 @@ def _parse_national(data: bytes) -> tuple[dict, dict]:
     else:
         sampled = all_vehicles
 
-    return {"total": total, "shown": len(sampled), "vehicles": sampled}, trip_positions_map
+    # "fetched" also ages honestly during outages: the negative cache re-serves
+    # this same payload, so the client can see exactly how stale it is.
+    return {"total": total, "shown": len(sampled), "fetched": int(time.time()),
+            "vehicles": sampled}, trip_positions_map
 
 
 async def trip_positions(client: httpx.AsyncClient) -> dict:
@@ -242,6 +250,17 @@ async def eta_estimates(client: httpx.AsyncClient, lat: float, lon: float) -> li
     vs = await vehicles(client, lon - 0.045, lat - 0.03, lon + 0.045, lat + 0.03)
     out = []
     for v in vs:
+        # Parked buses re-report a frozen fix for hours; one pointing at the
+        # stop would fabricate a phantom "due in N min". Live fixes only.
+        try:
+            rec = datetime.fromisoformat(v["recorded"])
+            if rec.tzinfo is None:      # offset-less strings: SIRI times are UTC
+                rec = rec.replace(tzinfo=timezone.utc)
+            if time.time() - rec.timestamp() > 900:
+                continue
+        # OSError: naive .timestamp() of epoch-ish values raises on Windows.
+        except (TypeError, ValueError, KeyError, OSError, OverflowError):
+            pass
         dy_km = (lat - v["lat"]) * 111.0
         dx_km = (lon - v["lon"]) * 111.0 * math.cos(math.radians(lat))
         dist = math.hypot(dx_km, dy_km)
